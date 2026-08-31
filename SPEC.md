@@ -12,6 +12,10 @@ deliberate — just do the task immediately.
 - Alert is a **full-screen takeover** (auto-launches, like an alarm), not just a notification.
 - "Exact alarm" permission (see Permissions below) does not mean a fixed schedule — it just
   makes whichever random time the app picks fire reliably instead of being delayed by Doze.
+- **No spoilers**: the selected task's identity must not be visible anywhere (home screen,
+  notification text, widgets, logs visible in-app, etc.) before its prompt actually fires.
+  Even if a task is picked/queued ahead of time internally for scheduling, the user should
+  never be able to see or predict which task is coming until the full-screen prompt appears.
 
 ## Task categories & pool
 - Tasks belong to a **category**. Onboarding/settings shows categories as **checkboxes** so the
@@ -33,6 +37,17 @@ deliberate — just do the task immediately.
   buffer added, not the exact instant).
 - No hard cap on snooze length/count yet (open — revisit if abuse/avoidance becomes an issue).
 
+## Task stack (multiple concurrent tasks)
+- Tasks are **stacked**, not single: more than one prompted task can be active/pending at once,
+  each running its own independent budget/deadline clock.
+- New setting **max concurrent tasks** (e.g. default 3) caps how many active tasks can be on
+  the stack at the same time.
+- If a new prompt fires while the stack is already at the limit, the **oldest** task on the
+  stack is immediately marked **failed** (counts as not-completed against scoring) and removed
+  to make room for the new one.
+- The full-screen view shows all currently-active stacked tasks (not just one), each with its
+  own Mark Complete / Snooze actions and its own remaining-time indicator.
+
 ## Timing & scoring
 - Each task has a budget (5/10/15 min) and a deadline of 2x budget.
   - Completed within budget → on-time.
@@ -52,12 +67,36 @@ deliberate — just do the task immediately.
   streaks, and the three score metrics over time.
 
 ## Storage
-- **Fully local-only.** All data — score/history, task pool, categories, settings — lives
-  on-device (Room/SQLite once implementation starts). No third-party storage, no network calls,
-  no accounts, no analytics/telemetry. Nothing leaves the phone.
-- Task pool data will be structured simply enough that a future "download more task packs"
-  feature could be bolted on without a rewrite, but no server/sync capability exists now —
-  deliberately deferred (see open questions).
+- **Local-first.** All data — score/history, task pool, categories, settings — lives on-device
+  (Room/SQLite once implementation starts). No accounts, no analytics/telemetry.
+- Task pool data is structured so an **optional external task source** can be layered on top
+  (see below) without a rewrite. Outside of that opt-in feature, there are no other network
+  calls and nothing else leaves the phone.
+
+## External task source (planned, design pending)
+- Goal: let the user optionally point the app at a **published Google Sheet (CSV export URL)**
+  as an additional/alternate task-pack source, refreshed **periodically** (not just manual pull).
+- Still to design before implementation (do not build yet): sync interval/trigger, expected
+  sheet column layout (must map to task/category/duration fields), how imported tasks merge
+  with or replace the local pool, conflict handling if a row is edited/removed upstream, offline
+  behavior when the sheet is unreachable, and whether this is per-category or a full pool swap.
+
+## Distribution & updates
+- Provide a **QR code** (e.g. in Settings/About) that links to the latest release APK for easy
+  sideload install/update on another device — for sharing/installing the app itself, not for
+  transferring in-app data.
+- **Implemented** via GitHub Actions (`.github/workflows/release-apk.yml`): every push to
+  `main` builds a debug APK, tags/publishes it as a GitHub Release, generates a QR code image
+  pointing at that release's direct download URL (`scripts/generate_install_page.py`), and
+  publishes a small install page + QR to GitHub Pages (`gh-pages` branch, `docs/` folder). Each
+  push produces a new tag (`v<versionName>-<run number>`), so the QR always points at the
+  latest build.
+- Debug builds are signed with a **checked-in debug keystore** (`keystore/debug.keystore`, not
+  a secret — Android debug keys are never meant to be secret) so every CI build shares the same
+  signature and installs cleanly over the previous version on-device.
+- One-time manual setup still required: enable GitHub Pages in repo Settings → Pages → source
+  = `gh-pages` branch, root. After that, the page URL is
+  `https://<owner>.github.io/<repo>/`.
 
 ## Permissions & OS behavior
 - `POST_NOTIFICATIONS` (Android 13+) — required just to alert at all. Onboarding blocks setup
@@ -90,8 +129,11 @@ deliberate — just do the task immediately.
 7. **Summary screen** — recap what's active/skipped and what that means, then finish → home.
 
 ## Open questions (for later)
-- Whether/how to let users pull down additional pre-made task lists (e.g. from a server) after
-  install — deferred, not decided yet; app stays 100% local until this is revisited.
+- External task source (Google Sheet): sync interval, sheet schema/column mapping, merge vs.
+  replace semantics, conflict/offline handling — see "External task source" section above.
+- QR install/update: where the APK is hosted (e.g. GitHub Releases) and how the QR content
+  gets generated/kept in sync with the latest build.
+- Max concurrent tasks default value and whether it's adjustable per-category or global only.
 - Snooze caps (max length / max count per task).
 - Exact rolling-window size (N) and EWMA decay factor for scores.
 - Exact weighting curve for adaptive difficulty tiers.
