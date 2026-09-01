@@ -13,10 +13,13 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
@@ -46,6 +49,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.material3.lightColorScheme
 import kotlinx.coroutines.delay
@@ -440,8 +446,9 @@ fun SettingsScreen(
     var endHour by remember { mutableStateOf(initialEndHour) }
     var promptsPerDay by remember { mutableStateOf(initialPromptsPerDay) }
     var rapidTestMode by remember { mutableStateOf(initialRapidTestMode) }
+    val focusManager = LocalFocusManager.current
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().imePadding()) {
         LazyColumn(
             modifier = Modifier
                 .weight(1f)
@@ -485,7 +492,9 @@ fun SettingsScreen(
                     value = startHour,
                     onValueChange = { startHour = it },
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Start hour (0-23)") }
+                    label = { Text("Start hour (0-23)") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+                    keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Down) })
                 )
             }
             item {
@@ -493,7 +502,9 @@ fun SettingsScreen(
                     value = endHour,
                     onValueChange = { endHour = it },
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("End hour (0-23)") }
+                    label = { Text("End hour (0-23)") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+                    keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Down) })
                 )
             }
             item {
@@ -501,7 +512,9 @@ fun SettingsScreen(
                     value = promptsPerDay,
                     onValueChange = { promptsPerDay = it },
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Prompts per day") }
+                    label = { Text("Prompts per day") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() })
                 )
             }
             item {
