@@ -3,6 +3,23 @@
 Free alternative to "Today Is The Day". Core skill being trained: when prompted, don't
 deliberate — just do the task immediately.
 
+## Punch list (not started / not coded / not in progress)
+- Persistent structured storage — still SharedPreferences/JSON, no Room/SQLite, no durable history log.
+- Real score tracking — rolling average, EWMA, and all-time % (only an in-session completed/attempted counter exists, resets on process death).
+- Prompt scheduling honoring the configured window/frequency — scheduler ignores start/end hour and prompts-per-day, fires on a flat fixed interval instead of stratified random sampling.
+- Snooze action (pause clock, random re-prompt shortly after) — doesn't exist; only a "show another task" decline exists.
+- Onboarding flow (welcome, notifications, combined permissions screen, category review, task pool review, summary) — not implemented.
+- Exact-alarm / full-screen-intent / battery-optimization permission requests and the degraded-behavior reminder banner — only POST_NOTIFICATIONS is requested.
+- Task stacking, "max concurrent tasks" setting, and oldest-task-auto-fail-on-overflow — not implemented.
+- No-spoiler enforcement (task identity hidden until its prompt fires) — not implemented/verified.
+- External task source (Google Sheet import via QR-transported link, tabs-as-categories) — design finalized, nothing built yet.
+- Adaptive difficulty weighting by score tier (low/mid/high shifting 5/10/15-min odds) — current weighting only down-weights previously-declined tasks, not score-based.
+- Background deadline/timeout enforcement (2x-budget auto-fail) — only exists as a foreground countdown in rapid-test mode, no real background tracking.
+- Per-task completion history log and streak tracking — not implemented.
+- Snooze caps (max length/count) — moot until snooze itself is implemented.
+- Category CRUD (add/remove/rename categories) — category list is hardcoded, not editable.
+- Optional task link (tap a task to open a URL, e.g. a how-to video) — no link field or tap-to-open exists yet.
+
 ## Daily prompting
 - Single configurable window per day. Default: 9am–9pm, 6 prompts/day.
 - Prompts fire at random times within the window, spaced using **stratified random
@@ -24,6 +41,11 @@ deliberate — just do the task immediately.
   default), plus Admin/Paperwork, Finances, Health, and Errands (unchecked by default, based on
   commonly-cited procrastination categories — user can enable anytime).
 - Each task has a category and a duration tier: 5 / 10 / 15 min.
+- Each task can have an **optional link** (e.g. a how-to/demo video URL) — if present, the
+  full-screen prompt shows a tappable action that opens it in the device's default browser
+  (standard `ACTION_VIEW` intent, not an in-app browser). Example: a "Do 100 steps" task
+  linking to a video demonstrating the exercise routine. Editable wherever tasks are
+  created/edited (My Tasks, Task Pool).
 - Tasks are **repeatable**: completing a task does not remove it from the pool — it goes back
   in and can be selected again later. The pool is never "used up".
 - Selection is random from active-category tasks, but **weighted adaptively** by the user's
@@ -73,13 +95,44 @@ deliberate — just do the task immediately.
   (see below) without a rewrite. Outside of that opt-in feature, there are no other network
   calls and nothing else leaves the phone.
 
-## External task source (planned, design pending)
-- Goal: let the user optionally point the app at a **published Google Sheet (CSV export URL)**
-  as an additional/alternate task-pack source, refreshed **periodically** (not just manual pull).
-- Still to design before implementation (do not build yet): sync interval/trigger, expected
-  sheet column layout (must map to task/category/duration fields), how imported tasks merge
-  with or replace the local pool, conflict handling if a row is edited/removed upstream, offline
-  behavior when the sheet is unreachable, and whether this is per-category or a full pool swap.
+## External task source (design finalized, not yet built)
+- **Getting the link into the app**: the GitHub Pages install page (same page as the
+  install/update QR) gets a text field where the user pastes an ordinary Google Sheet share
+  link and clicks "Generate QR". The page encodes it client-side into a custom-scheme QR
+  (`microtasking://import-tasks?url=<encoded sheet link>`) — no server involved, plain
+  JS/QR-library on the static page. The app registers an intent-filter for `microtasking://`
+  and jumps straight to an import-confirmation screen when that QR is scanned with the
+  in-app scanner (new capability — camera-based QR scan, requires `CAMERA` permission).
+- **Sharing requirement**: the Sheet just needs ordinary "Anyone with the link — Viewer"
+  sharing. No "Publish to web" step required.
+- **Tabs = categories**: each tab in the Sheet becomes a category 1:1 (tab title is the
+  category name), so users can define arbitrary custom categories just by naming tabs — no
+  hardcoded category list needed for imported content.
+- **Caveat**: Google Sheets tab names can't contain `/`. "Admin/Paperwork" becomes
+  "Admin - Paperwork" as a tab name — category-name matching for the merge rule below must
+  normalize this the same way on both sides, or the category gets renamed to avoid `/` going
+  forward. Not yet resolved in code.
+- **Starter template**: `content/microtasking-sheet-template.xlsx` (generated by
+  `scripts/generate_sheet_template.py` from `content/tasks.json`) — one tab per seed category,
+  `description, durationMinutes, link` columns, ready to upload to Google Drive as a starting
+  point. Re-run the script after editing `content/tasks.json` to regenerate it.
+- **How tabs are read**: a one-time Sheets API v4 metadata call (`spreadsheets.get`) lists
+  every tab's title + internal `gid`, using a Google Cloud API key restricted to the Sheets
+  API and to this app's package name + signing-cert SHA-1 (locked to the checked-in debug
+  keystore). Each tab's rows are then fetched via the plain CSV export URL
+  (`.../export?format=csv&gid=<id>`), which needs no API key — just the link-sharing
+  permission above.
+- **Row schema per tab** (category comes from the tab, so no category column needed):
+  `description, durationMinutes, link (optional)`. Rows failing validation (bad duration,
+  empty description) are skipped, not fatal.
+- **Merge behavior**: re-syncing a source replaces its own previously-imported tasks (IDs
+  derived deterministically from `sourceUrl + tab + row index`, so decline-counts/overrides
+  survive a refresh). If an imported tab's name matches an existing category, its tasks
+  **merge into that category** rather than staying in a separate namespaced bucket.
+- **Sync cadence**: manual "Refresh now" always available, plus periodic background sync
+  (interval TBD, e.g. daily) once a source is registered.
+- **Guardrails**: HTTPS-only, timeout + response-size cap on fetches, CSV parsed as plain data
+  only (never rendered/executed as HTML).
 
 ## Distribution & updates
 - Provide a **QR code** (e.g. in Settings/About) that links to the latest release APK for easy
@@ -129,8 +182,9 @@ deliberate — just do the task immediately.
 7. **Summary screen** — recap what's active/skipped and what that means, then finish → home.
 
 ## Open questions (for later)
-- External task source (Google Sheet): sync interval, sheet schema/column mapping, merge vs.
-  replace semantics, conflict/offline handling — see "External task source" section above.
+- External task source: exact periodic sync interval (e.g. daily?) and Google Cloud API key
+  setup steps (project creation, Sheets API enablement, Android app restriction) — see
+  "External task source" section above for the rest (now finalized).
 - QR install/update: where the APK is hosted (e.g. GitHub Releases) and how the QR content
   gets generated/kept in sync with the latest build.
 - Max concurrent tasks default value and whether it's adjustable per-category or global only.
