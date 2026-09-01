@@ -13,8 +13,8 @@ deliberate — just do the task immediately.
 - Task stacking, "max concurrent tasks" setting, and oldest-task-auto-fail-on-overflow — not implemented.
 - No-spoiler enforcement (task identity hidden until its prompt fires) — not implemented/verified.
 - External task source (Google Sheet import via QR-transported link, tabs-as-categories) — design finalized, nothing built yet.
-- Adaptive difficulty weighting by score tier (low/mid/high shifting 5/10/15-min odds) — current weighting only down-weights previously-declined tasks, not score-based.
-- Background deadline/timeout enforcement (2x-budget auto-fail) — only exists as a foreground countdown in rapid-test mode, no real background tracking.
+- Per-task adaptive duration (Start/Complete/Abandon workflow, elapsed-time tracking, rolling-average tier reclassification) — replaces the old fixed 5/10/15 authored duration; not implemented.
+- Defer mechanism (1 week / 1 month / 3 months / 6 months, triggered pre-Start from the prompt screen, backfills the stack immediately) — replaces enabled/temporarily-unavailable/never-suggest entirely; not implemented.
 - Per-task completion history log and streak tracking — not implemented.
 - Snooze caps (max length/count) — moot until snooze itself is implemented.
 - Category CRUD (add/remove/rename categories) — category list is hardcoded, not editable.
@@ -40,41 +40,68 @@ deliberate — just do the task immediately.
 - Seed categories (see `content/tasks.json`): Decluttering, Cleaning (both pre-checked by
   default), plus Admin/Paperwork, Finances, Health, and Errands (unchecked by default, based on
   commonly-cited procrastination categories — user can enable anytime).
-- Each task has a category and a duration tier: 5 / 10 / 15 min.
+- Each task has a category and a **duration tier: 5 / 10 / 15 min — app-maintained, not
+  authored**. Every task (built-in, user-created, or imported) starts at **5 min**. The tier is
+  reclassified automatically from actual measured time-on-task (see "Per-task duration
+  adaptation" below); it is never set manually and is not part of the task pool/sheet schema.
 - Each task can have an **optional link** (e.g. a how-to/demo video URL) — if present, the
   full-screen prompt shows a tappable action that opens it in the device's default browser
   (standard `ACTION_VIEW` intent, not an in-app browser). Example: a "Do 100 steps" task
   linking to a video demonstrating the exercise routine. Editable wherever tasks are
   created/edited (My Tasks, Task Pool).
-- Tasks are **repeatable**: completing a task does not remove it from the pool — it goes back
-  in and can be selected again later. The pool is never "used up".
-- Selection is random from active-category tasks, but **weighted adaptively** by the user's
-  current score (see below) — three difficulty tiers (low/normal/high score) shift the odds
-  toward shorter or longer tasks.
+- Tasks are **repeatable**: completing (or abandoning) a task does not remove it from the pool
+  — it goes back in and can be selected again later. The pool is never "used up", and nothing
+  is ever permanently hidden/disabled — see **Defer** below for the only way to postpone one.
+- Selection is random from active-category, non-deferred tasks, but **weighted adaptively** by
+  the user's current score (see below) — three difficulty tiers (low/normal/high score) shift
+  the odds toward shorter or longer tasks.
 
-## On-prompt interaction
-- Full-screen task view shows the task and two actions: **Mark Complete** and **Snooze**.
-- Snooze: user picks a duration (freeform time frame, e.g. "20 min"). Clock pauses while snoozed.
-  Task reappears at a **random point shortly after** the snooze duration elapses (small random
-  buffer added, not the exact instant).
-- No hard cap on snooze length/count yet (open — revisit if abuse/avoidance becomes an issue).
+## On-prompt interaction (Start / Complete / Abandoned / Defer)
+- Each task on the stack starts in a **not-started** state, offering two actions:
+  **Start** and **Defer**.
+  - **Start** begins the personal work-timer for that task and is required before Complete or
+    Abandoned become available — you can't mark something complete without having started it.
+  - **Defer**: pick 1 week / 1 month / 3 months / 6 months. The task immediately leaves the
+    stack (no score/failure impact — deferring is neutral) and is hidden from selection until
+    the deferral expires. A replacement task is selected immediately and **appended to the
+    bottom of the stack** so the stack stays full. Only available pre-Start; once a task is
+    started, Defer is no longer offered.
+- Once **Start** is pressed, the task's actions become **Complete** and **Abandoned**:
+  - **Complete**: stops the timer, records the actual elapsed time, counts as a success. See
+    "Per-task duration adaptation" for how this reshapes the task's tier.
+  - **Abandoned**: manual give-up, counts as a failure against scoring. Task returns to the
+    pool (still repeatable, not deferred, not disabled) for future selection.
+- **The only two ways a task fails**: (1) it gets **pushed off the top of the stack** when a
+  new prompt fires while at the "max concurrent tasks" limit (see Task stack below), or
+  (2) it is manually marked **Abandoned**. There is no separate deadline/timeout auto-fail —
+  the old fixed budget/2x-deadline mechanic is removed.
+
+## Per-task duration adaptation
+- Every task starts at **5 min**. After each **Complete**, the actual elapsed Start→Complete
+  time is recorded per-task.
+- The task's duration tier is recomputed as a **rolling average over the last N completions**
+  of that specific task (N still open — default proposal: 5), snapped to the nearest of
+  5 / 10 / 15 min. E.g. if actual completion time trends closer to 10 than 5, the task becomes
+  a 10-min task going forward.
+- This is independent of the score-based adaptive difficulty weighting below — that weighting
+  picks *which* tasks get selected more often; this adaptation changes what tier a *specific*
+  task is currently classified as.
 
 ## Task stack (multiple concurrent tasks)
-- Tasks are **stacked**, not single: more than one prompted task can be active/pending at once,
-  each running its own independent budget/deadline clock.
+- Tasks are **stacked**, not single: more than one prompted task can be active/pending at once.
 - New setting **max concurrent tasks** (e.g. default 3) caps how many active tasks can be on
   the stack at the same time.
 - If a new prompt fires while the stack is already at the limit, the **oldest** task on the
   stack is immediately marked **failed** (counts as not-completed against scoring) and removed
-  to make room for the new one.
+  to make room for the new one. This is one of the only two failure paths (see above).
 - The full-screen view shows all currently-active stacked tasks (not just one), each with its
-  own Mark Complete / Snooze actions and its own remaining-time indicator.
+  own Start/Defer or Complete/Abandoned actions depending on whether it's been started, plus
+  its own elapsed/remaining-time indicator.
 
 ## Timing & scoring
-- Each task has a budget (5/10/15 min) and a deadline of 2x budget.
-  - Completed within budget → on-time.
-  - Completed between budget and 2x budget → late but counted.
-  - Not completed within 2x budget (accounting for paused snooze time) → counts as not-completed.
+- Each task tracks actual elapsed Start→Complete time (see "Per-task duration adaptation").
+  There is no fixed deadline/budget auto-fail anymore — a task only fails via stack-eviction
+  or manual Abandon (see On-prompt interaction above).
 - Score is shown as **three numbers** after each response:
   1. Rolling average (last N tasks, e.g. N=10)
   2. Exponentially-weighted (recency-biased) average
@@ -123,8 +150,10 @@ deliberate — just do the task immediately.
   (`.../export?format=csv&gid=<id>`), which needs no API key — just the link-sharing
   permission above.
 - **Row schema per tab** (category comes from the tab, so no category column needed):
-  `description, durationMinutes, link (optional)`. Rows failing validation (bad duration,
-  empty description) are skipped, not fatal.
+  `description, link (optional)`. **No `durationMinutes` column** — duration is now an
+  app-maintained adaptive value (see "Per-task duration adaptation"), never authored; every
+  imported task starts at 5 min like any other. Rows with an empty description are skipped,
+  not fatal. `link`, if a real hyperlink is used in the sheet cell, is read as its target URL.
 - **Merge behavior**: re-syncing a source replaces its own previously-imported tasks (IDs
   derived deterministically from `sourceUrl + tab + row index`, so decline-counts/overrides
   survive a refresh). If an imported tab's name matches an existing category, its tasks
@@ -157,8 +186,8 @@ deliberate — just do the task immediately.
 - `USE_FULL_SCREEN_INTENT` — lets the notification auto-launch the full-screen task view over
   the lock screen. On Android 14+ this must be enabled manually by the user in system settings
   (app can deep-link there, can't force-grant). If denied, falls back to a heads-up notification
-  that opens the full-screen view on tap; the completion timer still starts when the prompt
-  fires, not when tapped.
+  that opens the full-screen view on tap; stack-eviction order is based on when the task was
+  prompted, not when it was tapped (the personal work-timer itself only starts on **Start**).
 - Exact alarm permission (`SCHEDULE_EXACT_ALARM` / "Alarms & reminders" toggle) — needed so
   prompts fire at the intended random time instead of being batched/delayed by Doze. If denied,
   prompts still fire but may arrive later than scheduled (inexact alarm fallback).
@@ -188,9 +217,11 @@ deliberate — just do the task immediately.
 - QR install/update: where the APK is hosted (e.g. GitHub Releases) and how the QR content
   gets generated/kept in sync with the latest build.
 - Max concurrent tasks default value and whether it's adjustable per-category or global only.
-- Snooze caps (max length / max count per task).
-- Exact rolling-window size (N) and EWMA decay factor for scores.
+- Snooze caps (max length / max count per task) — snooze (short pause/re-prompt) is still a
+  separate, undecided concept from Defer (long-term 1wk-6mo postponement, now finalized).
+- Exact rolling-window size (N) for per-task duration adaptation (default proposal: 5).
+- Exact rolling-window size (N) and EWMA decay factor for the overall score metrics.
 - Exact weighting curve for adaptive difficulty tiers.
 - Full list of categories beyond the starting two (Decluttering, Cleaning).
-- Editing/deleting tasks from the pool, and adding/removing categories (basic CRUD assumed
-  but not detailed yet).
+- Category CRUD (add/remove/rename categories) — see punch list.
+
