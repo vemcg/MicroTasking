@@ -14,6 +14,10 @@ class PromptAlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val preferences = context.getSharedPreferences("microtasking_settings", Context.MODE_PRIVATE)
         if (!preferences.getBoolean("background_prompts_enabled", true)) return
+        if (preferences.getBoolean("app_in_foreground", false)) {
+            Log.i("MicroTasking", "Suppressing background prompt while app is in foreground")
+            return
+        }
         Log.i("MicroTasking", "Background prompt alarm received")
         PromptNotifier.show(context)
         val rapidTestMode = preferences.getBoolean("rapid_test_mode", false)
@@ -64,6 +68,11 @@ object PromptScheduler {
     private const val REQUEST_CODE = 1002
 
     fun scheduleNext(context: Context, rapidTestMode: Boolean) {
+        val preferences = context.getSharedPreferences("microtasking_settings", Context.MODE_PRIVATE)
+        if (preferences.getBoolean("app_in_foreground", false)) {
+            Log.i("MicroTasking", "Skipping schedule while app is foregrounded")
+            return
+        }
         val delayMillis = if (rapidTestMode) 15_000L else 15 * 60 * 1_000L
         val intent = Intent(context, PromptAlarmReceiver::class.java)
         val pendingIntent = PendingIntent.getBroadcast(

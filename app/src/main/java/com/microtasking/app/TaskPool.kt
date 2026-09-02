@@ -16,6 +16,40 @@ data class ManagedTask(
     val neverSuggest: Boolean = false
 )
 
+enum class TaskLifecycleState {
+    READY,
+    STARTED,
+    COMPLETED,
+    ABANDONED,
+    DEFERRED
+}
+
+data class TaskStackEntry(
+    val task: ManagedTask,
+    val state: TaskLifecycleState = TaskLifecycleState.READY,
+    val startedAtEpochMs: Long? = null,
+    val deferredUntilEpochMs: Long? = null
+) {
+    fun start(): TaskStackEntry = copy(
+        state = TaskLifecycleState.STARTED,
+        startedAtEpochMs = startedAtEpochMs ?: System.currentTimeMillis()
+    )
+
+    fun complete(): TaskStackEntry = copy(state = TaskLifecycleState.COMPLETED)
+
+    fun abandon(): TaskStackEntry = copy(state = TaskLifecycleState.ABANDONED)
+
+    fun defer(days: Long): TaskStackEntry = copy(
+        state = TaskLifecycleState.DEFERRED,
+        deferredUntilEpochMs = System.currentTimeMillis() + (days * 24 * 60 * 60 * 1000L)
+    )
+
+    fun isActionable(): Boolean = state == TaskLifecycleState.READY || state == TaskLifecycleState.STARTED
+}
+
+fun makeTaskStack(tasks: List<ManagedTask>, maxEntries: Int = 3): List<TaskStackEntry> =
+    tasks.take(maxEntries).map { TaskStackEntry(task = it, state = TaskLifecycleState.READY) }
+
 val builtInTasks = listOf(
     ManagedTask("declutter-surface", "Clear one flat surface completely.", "Decluttering", 5, true),
     ManagedTask("declutter-drawer", "Clear out one kitchen drawer.", "Decluttering", 10, true),
@@ -109,5 +143,13 @@ fun readDeclineCounts(json: String): Map<String, Int> = runCatching {
     val values = JSONObject(json)
     values.keys().asSequence().associateWith { values.getInt(it) }
 }.getOrDefault(emptyMap())
+
+fun taskStateLabel(state: TaskLifecycleState): String = when (state) {
+    TaskLifecycleState.READY -> "Ready"
+    TaskLifecycleState.STARTED -> "Started"
+    TaskLifecycleState.COMPLETED -> "Completed"
+    TaskLifecycleState.ABANDONED -> "Abandoned"
+    TaskLifecycleState.DEFERRED -> "Deferred"
+}
 
 fun writeDeclineCounts(counts: Map<String, Int>): String = JSONObject(counts).toString()
