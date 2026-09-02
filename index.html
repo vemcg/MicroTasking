@@ -3,17 +3,264 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MicroTasking install</title>
+<title>MicroTasking &mdash; Quick Start & Onboarding</title>
 <style>
-  body { font-family: sans-serif; text-align: center; margin-top: 3rem; }
-  img { width: 260px; height: 260px; }
-  a { display: inline-block; margin-top: 1rem; font-size: 1.1rem; }
+  :root {
+    --bg: #0f172a;
+    --card-bg: #1e293b;
+    --text: #f8fafc;
+    --text-muted: #94a3b8;
+    --accent: #38bdf8;
+    --accent-hover: #0284c7;
+    --border: #334155;
+    --badge-bg: #0369a1;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background-color: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    padding: 2rem 1rem;
+    max-width: 800px;
+    margin: 0 auto;
+  }
+  header {
+    text-align: center;
+    margin-bottom: 2.5rem;
+    padding-bottom: 1.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+  h1 {
+    font-size: 2.25rem;
+    color: var(--accent);
+    margin-bottom: 0.5rem;
+  }
+  .tagline {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    margin-bottom: 1rem;
+  }
+  .intro {
+    font-size: 1.05rem;
+    color: #cbd5e1;
+    text-align: left;
+    background: var(--card-bg);
+    padding: 1.25rem;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+  }
+  .step {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.5rem;
+    margin-bottom: 2rem;
+  }
+  .step-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+  }
+  .step-num {
+    background: var(--badge-bg);
+    color: #fff;
+    font-weight: bold;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .step-title {
+    font-size: 1.3rem;
+    font-weight: 600;
+    color: var(--text);
+  }
+  ul, ol {
+    margin-left: 1.5rem;
+    margin-bottom: 1rem;
+  }
+  li {
+    margin-bottom: 0.5rem;
+  }
+  a {
+    color: var(--accent);
+    text-decoration: none;
+  }
+  a:hover {
+    text-decoration: underline;
+  }
+  .btn {
+    display: inline-block;
+    background: var(--accent);
+    color: #0f172a;
+    font-weight: bold;
+    padding: 0.6rem 1.2rem;
+    border-radius: 6px;
+    margin-top: 0.5rem;
+  }
+  .btn:hover {
+    background: var(--accent-hover);
+    color: #fff;
+    text-decoration: none;
+  }
+  .qr-container {
+    text-align: center;
+    margin: 1.25rem 0;
+  }
+  .qr-container img, .qr-container canvas {
+    background: #fff;
+    padding: 10px;
+    border-radius: 8px;
+    max-width: 220px;
+    height: auto;
+  }
+  .input-group {
+    margin: 1rem 0;
+  }
+  input[type="url"] {
+    width: 100%;
+    padding: 0.75rem;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: #090d16;
+    color: #fff;
+    font-size: 1rem;
+  }
+  input[type="url"]:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  .badge-android {
+    display: inline-block;
+    background: #15803d;
+    color: #fff;
+    font-size: 0.8rem;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    vertical-align: middle;
+    margin-left: 0.5rem;
+  }
 </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 </head>
 <body>
-  <h1>MicroTasking</h1>
-  <p>Scan to install/update &mdash; version v0.1.0-4</p>
-  <img src="qr.png" alt="QR code linking to the MicroTasking APK">
-  <p><a href="https://github.com/vemcg/MicroTasking/releases/download/v0.1.0-4/MicroTasking-v0.1.0-4.apk">Direct download link</a></p>
+  <header>
+    <h1>MicroTasking</h1>
+    <div class="tagline">Break Procrastination. Build Momentum.</div>
+    <div class="intro">
+      <strong>MicroTasking</strong> helps you stop overthinking and start doing. Procrastination usually stems from friction, decision fatigue, and feeling overwhelmed by large tasks. MicroTasking overcomes this by prompting you at random times with brief, bite-sized tasks (5&ndash;15 minutes) from your own customizable pool. When a prompt appears, there is no deliberation &mdash; just start, build momentum, and get on with your day.
+    </div>
+  </header>
+
+  <main>
+    <!-- STEP 1 -->
+    <section class="step">
+      <div class="step-header">
+        <div class="step-num">1</div>
+        <div class="step-title">Create & Customize Your Task Pool</div>
+      </div>
+      <p>Your task pool is managed directly in a Google Sheet:</p>
+      <ul>
+        <li><strong>Open the Template:</strong> Click <a href="#" target="_blank" rel="noopener">MicroTasking Google Sheet Template</a> to open it in your browser.</li>
+        <li><strong>Make Your Copy:</strong> In Google Sheets, tap <strong>File &rarr; Make a copy</strong> to save an editable copy to your Google Drive.</li>
+        <li><strong>Categories = Tabs:</strong> Each tab at the bottom represents a category (e.g. <em>Cleaning</em>, <em>Decluttering</em>, <em>Admin</em>). Add, rename, or remove tabs as you wish.</li>
+        <li><strong>Tasks & Checkboxes:</strong> Add your tasks into the spreadsheet. Use the checkbox in <strong>Column A</strong> to enable or disable individual tasks. <em>(Category-level toggles can also be managed directly in the app!)</em></li>
+      </ul>
+    </section>
+
+    <!-- STEP 2 -->
+    <section class="step">
+      <div class="step-header">
+        <div class="step-num">2</div>
+        <div class="step-title">Install & Launch the App <span class="badge-android">Android Only</span></div>
+      </div>
+      <ol>
+        <li>
+          <strong>Scan or Download:</strong> Point your phone's camera at the QR code below, or click the direct download link if viewing this page on your phone:
+          <div class="qr-container">
+            <img src="qr.png" alt="MicroTasking APK QR Code">
+            <br>
+            <a href="https://github.com/vemcg/MicroTasking/releases/download/v0.1.5-5/MicroTasking-v0.1.5-5.apk" class="btn">Direct Download APK (vv0.1.5-5)</a>
+          </div>
+        </li>
+        <li>
+          <strong>Allow Sideloading (First Time Only):</strong>
+          <ul>
+            <li>Open your downloads and tap the <code>.apk</code> file.</li>
+            <li>If Android displays <em>"For your security, your phone is not allowed to install unknown apps from this source"</em>, tap <strong>Settings</strong>, toggle <strong>Allow from this source</strong> to ON, then go back and tap <strong>Install</strong>.</li>
+            <li>If Google Play Protect displays a warning, tap <strong>More details &rarr; Install anyway</strong>.</li>
+          </ul>
+        </li>
+        <li>
+          <strong>Launch & Grant Permissions:</strong> Open MicroTasking from your home screen. When prompted, grant <strong>Notifications</strong> and <strong>Exact Alarms / Display over other apps</strong> permissions so full-screen prompt takeovers can wake your screen.
+        </li>
+      </ol>
+    </section>
+
+    <!-- STEP 3 -->
+    <section class="step">
+      <div class="step-header">
+        <div class="step-num">3</div>
+        <div class="step-title">Generate Your Sheet's QR Code</div>
+      </div>
+      <p>Instead of typing a long URL on your phone keyboard, generate a QR code right here:</p>
+      <ol>
+        <li>In your copied Google Sheet, make sure sharing is set to <strong>"Anyone with the link can view"</strong> (tap <strong>Share &rarr; Anyone with the link</strong>).</li>
+        <li>Copy your Google Sheet URL from your browser bar.</li>
+        <li>Paste your URL into the box below:</li>
+      </ol>
+      <div class="input-group">
+        <input type="url" id="sheetUrl" placeholder="https://docs.google.com/spreadsheets/d/your-sheet-id/edit..." oninput="generateSheetQr()">
+      </div>
+      <div class="qr-container" id="sheetQrContainer" style="display:none;">
+        <p style="margin-bottom: 0.5rem; font-weight: 600; color: var(--accent);">Your Sheet QR Code:</p>
+        <div id="sheetQr"></div>
+      </div>
+    </section>
+
+    <!-- STEP 4 -->
+    <section class="step">
+      <div class="step-header">
+        <div class="step-num">4</div>
+        <div class="step-title">Scan & Sync in MicroTasking</div>
+      </div>
+      <ol>
+        <li>Open the <strong>MicroTasking</strong> app on your Android phone.</li>
+        <li>Tap the <strong>Settings (gear icon)</strong> in the top corner.</li>
+        <li>Select <strong>Import External Task Pool</strong>.</li>
+        <li>Tap <strong>Scan QR Code</strong> and scan the QR code generated in Step 3 above.</li>
+      </ol>
+      <p style="color: var(--accent); font-weight: 600; margin-top: 0.5rem;">You're all set! MicroTasking will now automatically sync your categories and tasks.</p>
+    </section>
+  </main>
+
+  <script>
+    function generateSheetQr() {
+      const input = document.getElementById('sheetUrl').value.trim();
+      const container = document.getElementById('sheetQrContainer');
+      const qrDiv = document.getElementById('sheetQr');
+      
+      qrDiv.innerHTML = '';
+      if (input.length > 10) {
+        container.style.display = 'block';
+        new QRCode(qrDiv, {
+          text: input,
+          width: 200,
+          height: 200,
+          colorDark : "#000000",
+          colorLight : "#ffffff",
+          correctLevel : QRCode.CorrectLevel.M
+        });
+      } else {
+        container.style.display = 'none';
+      }
+    }
+  </script>
 </body>
 </html>
