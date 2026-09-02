@@ -12,7 +12,7 @@ import pathlib
 from openpyxl import Workbook
 from openpyxl.worksheet.hyperlink import Hyperlink
 
-HEADER = ["description", "link"]
+HEADER = ["enabled", "description", "link"]
 INVALID_SHEET_TITLE_CHARS = str.maketrans({c: "-" for c in "/\\?*[]:"})
 
 
@@ -32,9 +32,10 @@ def main() -> None:
         sheet = workbook.create_sheet(title=title)
         sheet.append(HEADER)
         for row_index, task in enumerate(category["tasks"], start=2):
-            sheet.cell(row=row_index, column=1, value=task["description"])
+            sheet.cell(row=row_index, column=1, value=True)  # Column A: Enabled checkbox (TRUE)
+            sheet.cell(row=row_index, column=2, value=task["description"])  # Column B: Description
             link = task.get("link", "")
-            link_cell = sheet.cell(row=row_index, column=2, value=link or None)
+            link_cell = sheet.cell(row=row_index, column=3, value=link or None)  # Column C: Optional link
             if link:
                 link_cell.hyperlink = Hyperlink(ref=link_cell.coordinate, target=link)
 
