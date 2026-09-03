@@ -34,6 +34,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -87,6 +88,7 @@ class MainActivity : ComponentActivity() {
                         promptsPerDay = preferences.getString("prompts_per_day", "6") ?: "6",
                         rapidTestMode = preferences.getBoolean("rapid_test_mode", false),
                         maxQueueSize = preferences.getInt("max_task_queue_size", 3),
+                        externalSheetUrl = preferences.getString("external_sheet_url", "") ?: "",
                         managedTasks = readManagedTasks(
                             preferences.getString("managed_tasks", "[]") ?: "[]"
                         ),
@@ -95,7 +97,7 @@ class MainActivity : ComponentActivity() {
                             preferences.getString("task_decline_counts", "{}") ?: "{}"
                         ),
                         userTasks = readUserTasks(preferences.getString("user_tasks", "[]") ?: "[]"),
-                        onSettingsSaved = { categories, start, end, prompts, rapidMode, maxQueueSize ->
+                        onSettingsSaved = { categories, start, end, prompts, rapidMode, maxQueueSize, sheetUrl ->
                             preferences.edit()
                                 .putBoolean("setup_complete", true)
                                 .putStringSet("selected_categories", categories)
@@ -104,6 +106,7 @@ class MainActivity : ComponentActivity() {
                                 .putString("prompts_per_day", prompts)
                                 .putBoolean("rapid_test_mode", rapidMode)
                                 .putInt("max_task_queue_size", maxQueueSize)
+                                .putString("external_sheet_url", sheetUrl)
                                 .putBoolean("background_prompts_enabled", true)
                                 .apply()
                             PromptScheduler.scheduleNext(this, rapidMode)
@@ -170,11 +173,12 @@ fun MicroTaskingApp(
     promptsPerDay: String,
     rapidTestMode: Boolean,
     maxQueueSize: Int,
+    externalSheetUrl: String,
     userTasks: List<UserTask>,
     managedTasks: List<ManagedTask>,
     seedTasks: List<ManagedTask>,
     declineCounts: Map<String, Int>,
-    onSettingsSaved: (Set<String>, String, String, String, Boolean, Int) -> Unit,
+    onSettingsSaved: (Set<String>, String, String, String, Boolean, Int, String) -> Unit,
     onUserTasksSaved: (List<UserTask>) -> Unit,
     onManagedTasksSaved: (List<ManagedTask>) -> Unit,
     onDeclineCountsSaved: (Map<String, Int>) -> Unit,
@@ -190,6 +194,7 @@ fun MicroTaskingApp(
     var savedPromptsPerDay by remember { mutableStateOf(promptsPerDay) }
     var savedRapidTestMode by remember { mutableStateOf(rapidTestMode) }
     var savedMaxQueueSize by remember { mutableIntStateOf(maxQueueSize) }
+    var savedSheetUrl by remember { mutableStateOf(externalSheetUrl) }
     var savedUserTasks by remember { mutableStateOf(userTasks) }
     var savedManagedTasks by remember {
         mutableStateOf(if (managedTasks.isEmpty()) seedTasks else managedTasks)
@@ -260,16 +265,18 @@ fun MicroTaskingApp(
             initialPromptsPerDay = savedPromptsPerDay,
             initialRapidTestMode = savedRapidTestMode,
             initialMaxQueueSize = savedMaxQueueSize,
+            initialSheetUrl = savedSheetUrl,
             onOpenMyTasks = { showingMyTasks = true },
             onOpenTaskPool = { showingTaskPool = true },
-            onSave = { categories, start, end, prompts, rapidMode, queueSize ->
+            onSave = { categories, start, end, prompts, rapidMode, queueSize, sheetUrl ->
                 savedCategories = categories
                 savedStartHour = start
                 savedEndHour = end
                 savedPromptsPerDay = prompts
                 savedRapidTestMode = rapidMode
                 savedMaxQueueSize = queueSize
-                onSettingsSaved(categories, start, end, prompts, rapidMode, queueSize)
+                savedSheetUrl = sheetUrl
+                onSettingsSaved(categories, start, end, prompts, rapidMode, queueSize, sheetUrl)
                 showingSettings = false
             }
         )
@@ -528,17 +535,20 @@ fun SettingsScreen(
     initialPromptsPerDay: String,
     initialRapidTestMode: Boolean,
     initialMaxQueueSize: Int,
+    initialSheetUrl: String = "",
     onOpenMyTasks: () -> Unit,
     onOpenTaskPool: () -> Unit,
-    onSave: (Set<String>, String, String, String, Boolean, Int) -> Unit
+    onSave: (Set<String>, String, String, String, Boolean, Int, String) -> Unit
 ) {
-    val categories = listOf("Decluttering", "Cleaning", "Admin/Paperwork", "Finances", "Health", "Errands")
+    val categories = listOf("Decluttering", "Cleaning", "Paperwork", "Admin/Paperwork", "Finances", "Health", "Errands")
     var selectedCategories by remember { mutableStateOf(initialCategories) }
     var startHour by remember { mutableStateOf(initialStartHour) }
     var endHour by remember { mutableStateOf(initialEndHour) }
     var promptsPerDay by remember { mutableStateOf(initialPromptsPerDay) }
     var rapidTestMode by remember { mutableStateOf(initialRapidTestMode) }
     var maxQueueSize by remember { mutableStateOf(initialMaxQueueSize.toString()) }
+    var sheetUrl by remember { mutableStateOf(initialSheetUrl) }
+    var showQrScannerDialog by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
 
     Column(modifier = Modifier.fillMaxSize().imePadding()) {
@@ -546,96 +556,182 @@ fun SettingsScreen(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .padding(horizontal = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             item {
                 Text(
                     "Settings",
-                    modifier = Modifier.padding(top = 20.dp),
+                    modifier = Modifier.padding(top = 16.dp, bottom = 4.dp),
                     style = MaterialTheme.typography.headlineMedium
                 )
             }
-            item { Text("Choose the categories eligible for your task prompts.") }
-            items(categories, key = { it }) { category ->
-                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(
-                        checked = category in selectedCategories,
-                        onCheckedChange = { checked ->
-                            selectedCategories = if (checked) selectedCategories + category else selectedCategories - category
+
+            // SECTION 1: Active Categories
+            item {
+                OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Active Categories", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "Choose which task categories are eligible for daily task prompts.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        categories.forEach { category ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = category in selectedCategories,
+                                    onCheckedChange = { checked ->
+                                        selectedCategories = if (checked) selectedCategories + category else selectedCategories - category
+                                    }
+                                )
+                                Text(category)
+                            }
                         }
-                    )
-                    Text(category)
-                }
-            }
-            item { Text("Manage your task pool", style = MaterialTheme.typography.titleMedium) }
-            item {
-                Button(modifier = Modifier.fillMaxWidth(), onClick = onOpenMyTasks) {
-                    Text("My Tasks")
-                }
-            }
-            item {
-                Button(modifier = Modifier.fillMaxWidth(), onClick = onOpenTaskPool) {
-                    Text("Task pool")
-                }
-            }
-            item { Text("Prompt schedule", style = MaterialTheme.typography.titleMedium) }
-            item {
-                OutlinedTextField(
-                    value = startHour,
-                    onValueChange = { startHour = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Start hour (0-23)") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
-                    keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Down) })
-                )
-            }
-            item {
-                OutlinedTextField(
-                    value = maxQueueSize,
-                    onValueChange = { maxQueueSize = it.filter(Char::isDigit) },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Task queue size") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
-                    keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() })
-                )
-            }
-            item {
-                OutlinedTextField(
-                    value = endHour,
-                    onValueChange = { endHour = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("End hour (0-23)") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
-                    keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Down) })
-                )
-            }
-            item {
-                OutlinedTextField(
-                    value = promptsPerDay,
-                    onValueChange = { promptsPerDay = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Prompts per day") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
-                    keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() })
-                )
-            }
-            item {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 20.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("Rapid test mode", style = MaterialTheme.typography.titleMedium)
-                        Text("After a completion, show another test prompt in a few seconds.")
                     }
-                    Checkbox(
-                        checked = rapidTestMode,
-                        onCheckedChange = { rapidTestMode = it }
-                    )
+                }
+            }
+
+            // SECTION 2: Prompting Schedule
+            item {
+                OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("Prompting Schedule", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "Configure your active daily window and prompt frequency.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        OutlinedTextField(
+                            value = startHour,
+                            onValueChange = { startHour = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("Start hour (0-23)") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+                            keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Down) })
+                        )
+                        OutlinedTextField(
+                            value = endHour,
+                            onValueChange = { endHour = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("End hour (0-23)") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+                            keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Down) })
+                        )
+                        OutlinedTextField(
+                            value = promptsPerDay,
+                            onValueChange = { promptsPerDay = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("Prompts per day") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+                            keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Down) })
+                        )
+                        OutlinedTextField(
+                            value = maxQueueSize,
+                            onValueChange = { maxQueueSize = it.filter(Char::isDigit) },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("Task queue size") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+                            keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() })
+                        )
+                    }
+                }
+            }
+
+            // SECTION 3: External Task Pool / Import Sheet
+            item {
+                OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("Import External Task Pool", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "Sync tasks directly from your Google Sheet or CSV link.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        OutlinedTextField(
+                            value = sheetUrl,
+                            onValueChange = { sheetUrl = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("Google Sheet / CSV URL") },
+                            placeholder = { Text("https://docs.google.com/spreadsheets/d/...") },
+                            singleLine = true
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                modifier = Modifier.weight(1f),
+                                onClick = { showQrScannerDialog = true }
+                            ) {
+                                Text("Scan QR Code")
+                            }
+                            Button(
+                                modifier = Modifier.weight(1f),
+                                enabled = sheetUrl.isNotBlank(),
+                                onClick = {
+                                    // Sheet sync trigger
+                                }
+                            ) {
+                                Text("Sync Sheet")
+                            }
+                        }
+                    }
+                }
+            }
+
+            // SECTION 4: Local Task Management
+            item {
+                OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("Local Task Management", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "View, create, or edit your local custom tasks and task pool.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(modifier = Modifier.weight(1f), onClick = onOpenMyTasks) {
+                                Text("My Tasks")
+                            }
+                            Button(modifier = Modifier.weight(1f), onClick = onOpenTaskPool) {
+                                Text("Task Pool")
+                            }
+                        }
+                    }
+                }
+            }
+
+            // SECTION 5: Testing & Development
+            item {
+                OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Testing & Development", style = MaterialTheme.typography.titleMedium)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Rapid test mode", style = MaterialTheme.typography.bodyLarge)
+                                Text(
+                                    "Show test prompts every 15 seconds for fast testing.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Checkbox(
+                                checked = rapidTestMode,
+                                onCheckedChange = { rapidTestMode = it }
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -643,7 +739,7 @@ fun SettingsScreen(
             Button(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(24.dp)
+                    .padding(16.dp)
                     .navigationBarsPadding(),
                 enabled = selectedCategories.isNotEmpty(),
                 onClick = {
@@ -653,13 +749,29 @@ fun SettingsScreen(
                         endHour,
                         promptsPerDay,
                         rapidTestMode,
-                        maxQueueSize.toIntOrNull()?.coerceAtLeast(1) ?: 3
+                        maxQueueSize.toIntOrNull()?.coerceAtLeast(1) ?: 3,
+                        sheetUrl
                     )
                 }
             ) {
-                Text("Save settings")
+                Text("Save Settings")
             }
         }
+    }
+
+    if (showQrScannerDialog) {
+        AlertDialog(
+            onDismissRequest = { showQrScannerDialog = false },
+            title = { Text("Scan Sheet QR Code") },
+            text = {
+                Text("Point your camera at your Google Sheet QR code from the onboarding page, or paste your Google Sheet URL directly into the field above.")
+            },
+            confirmButton = {
+                Button(onClick = { showQrScannerDialog = false }) {
+                    Text("OK")
+                }
+            }
+        )
     }
 }
 
