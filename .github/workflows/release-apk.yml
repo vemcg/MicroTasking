@@ -56,6 +56,7 @@ jobs:
           python scripts/generate_install_page.py \
             --url "https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.tag }}/${{ steps.version.outputs.asset_name }}" \
             --version "${{ steps.version.outputs.tag }}" \
+            --template-url "https://docs.google.com/spreadsheets/d/1Ss15J7afOl3HON6h2dI8f8hGi8JYjH0hRywuV0nCYOg/edit?usp=sharing" \
             --out docs
 
       - name: Deploy install page to GitHub Pages

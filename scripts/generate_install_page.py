@@ -10,7 +10,11 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", required=True, help="Direct APK download URL")
     parser.add_argument("--version", required=True, help="Release tag/version label")
-    parser.add_argument("--template-url", default="#", help="Google Sheet template URL")
+    parser.add_argument(
+        "--template-url",
+        default="https://docs.google.com/spreadsheets/d/1Ss15J7afOl3HON6h2dI8f8hGi8JYjH0hRywuV0nCYOg/edit?usp=sharing",
+        help="Google Sheet template URL",
+    )
     parser.add_argument("--out", default="docs", help="Output directory")
     args = parser.parse_args()
 
