@@ -24,7 +24,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Settings
+import java.net.URL
+import java.net.URLDecoder
+import java.net.URLEncoder
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
@@ -268,6 +273,15 @@ fun MicroTaskingApp(
             initialSheetUrl = savedSheetUrl,
             onOpenMyTasks = { showingMyTasks = true },
             onOpenTaskPool = { showingTaskPool = true },
+            onSyncSheet = { url ->
+                val importedTasks = importExternalTasksFromSheet(url)
+                if (importedTasks.isNotEmpty()) {
+                    savedManagedTasks = importedTasks + savedManagedTasks.filter { task ->
+                        task.category !in importedTasks.map { it.category }
+                    }
+                    onManagedTasksSaved(savedManagedTasks)
+                }
+            },
             onSave = { categories, start, end, prompts, rapidMode, queueSize, sheetUrl ->
                 savedCategories = categories
                 savedStartHour = start
@@ -538,6 +552,7 @@ fun SettingsScreen(
     initialSheetUrl: String = "",
     onOpenMyTasks: () -> Unit,
     onOpenTaskPool: () -> Unit,
+    onSyncSheet: (String) -> Unit,
     onSave: (Set<String>, String, String, String, Boolean, Int, String) -> Unit
 ) {
     val categories = listOf("Decluttering", "Cleaning", "Paperwork", "Admin/Paperwork", "Finances", "Health", "Errands")
@@ -549,7 +564,31 @@ fun SettingsScreen(
     var maxQueueSize by remember { mutableStateOf(initialMaxQueueSize.toString()) }
     var sheetUrl by remember { mutableStateOf(initialSheetUrl) }
     var showQrScannerDialog by remember { mutableStateOf(false) }
+    var qrEntry by remember { mutableStateOf(initialSheetUrl) }
+    var externalImportMessage by remember { mutableStateOf<String?>(null) }
+    var categoriesExpanded by remember { mutableStateOf(true) }
+    var scheduleExpanded by remember { mutableStateOf(true) }
+    var externalPoolExpanded by remember { mutableStateOf(true) }
+    var localTasksExpanded by remember { mutableStateOf(true) }
+    var testingExpanded by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
+
+    @Composable
+    fun sectionHeader(title: String, expanded: Boolean, onToggle: () -> Unit) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            IconButton(onClick = onToggle) {
+                Icon(
+                    if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                    contentDescription = if (expanded) "Collapse" else "Expand"
+                )
+            }
+        }
+    }
 
     Column(modifier = Modifier.fillMaxSize().imePadding()) {
         LazyColumn(
@@ -567,169 +606,190 @@ fun SettingsScreen(
                 )
             }
 
-            // SECTION 1: Active Categories
             item {
                 OutlinedCard(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("Active Categories", style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            "Choose which task categories are eligible for daily task prompts.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        categories.forEach { category ->
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Checkbox(
-                                    checked = category in selectedCategories,
-                                    onCheckedChange = { checked ->
-                                        selectedCategories = if (checked) selectedCategories + category else selectedCategories - category
-                                    }
-                                )
-                                Text(category)
-                            }
+                        sectionHeader("Import External Task Pool", externalPoolExpanded) {
+                            externalPoolExpanded = !externalPoolExpanded
                         }
-                    }
-                }
-            }
-
-            // SECTION 2: Prompting Schedule
-            item {
-                OutlinedCard(modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text("Prompting Schedule", style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            "Configure your active daily window and prompt frequency.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        OutlinedTextField(
-                            value = startHour,
-                            onValueChange = { startHour = it },
-                            modifier = Modifier.fillMaxWidth(),
-                            label = { Text("Start hour (0-23)") },
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
-                            keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Down) })
-                        )
-                        OutlinedTextField(
-                            value = endHour,
-                            onValueChange = { endHour = it },
-                            modifier = Modifier.fillMaxWidth(),
-                            label = { Text("End hour (0-23)") },
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
-                            keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Down) })
-                        )
-                        OutlinedTextField(
-                            value = promptsPerDay,
-                            onValueChange = { promptsPerDay = it },
-                            modifier = Modifier.fillMaxWidth(),
-                            label = { Text("Prompts per day") },
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
-                            keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Down) })
-                        )
-                        OutlinedTextField(
-                            value = maxQueueSize,
-                            onValueChange = { maxQueueSize = it.filter(Char::isDigit) },
-                            modifier = Modifier.fillMaxWidth(),
-                            label = { Text("Task queue size") },
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
-                            keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() })
-                        )
-                    }
-                }
-            }
-
-            // SECTION 3: External Task Pool / Import Sheet
-            item {
-                OutlinedCard(modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text("Import External Task Pool", style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            "Sync tasks directly from your Google Sheet or CSV link.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        OutlinedTextField(
-                            value = sheetUrl,
-                            onValueChange = { sheetUrl = it },
-                            modifier = Modifier.fillMaxWidth(),
-                            label = { Text("Google Sheet / CSV URL") },
-                            placeholder = { Text("https://docs.google.com/spreadsheets/d/...") },
-                            singleLine = true
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
+                        if (externalPoolExpanded) {
+                            Text(
+                                "Paste your Google Sheet URL first. The onboarding page will generate its QR code, which you can scan here to load the URL.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            OutlinedTextField(
+                                value = sheetUrl,
+                                onValueChange = { sheetUrl = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("Google Sheet / CSV URL") },
+                                placeholder = { Text("https://docs.google.com/spreadsheets/d/...") },
+                                singleLine = true
+                            )
                             Button(
-                                modifier = Modifier.weight(1f),
-                                onClick = { showQrScannerDialog = true }
-                            ) {
-                                Text("Scan QR Code")
-                            }
-                            Button(
-                                modifier = Modifier.weight(1f),
-                                enabled = sheetUrl.isNotBlank(),
+                                modifier = Modifier.fillMaxWidth(),
                                 onClick = {
-                                    // Sheet sync trigger
+                                    qrEntry = sheetUrl
+                                    showQrScannerDialog = true
                                 }
                             ) {
-                                Text("Sync Sheet")
+                                Text("Scan QR Code to Load URL")
+                            }
+                            Button(
+                                modifier = Modifier.fillMaxWidth(),
+                                enabled = sheetUrl.isNotBlank(),
+                                onClick = {
+                                    onSyncSheet(sheetUrl.trim())
+                                    externalImportMessage = "Import started."
+                                }
+                            ) {
+                                Text("Import / Synchronize")
+                            }
+                            if (externalImportMessage != null) {
+                                Text(
+                                    externalImportMessage!!,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
                             }
                         }
                     }
                 }
             }
 
-            // SECTION 4: Local Task Management
-            item {
-                OutlinedCard(modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text("Local Task Management", style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            "View, create, or edit your local custom tasks and task pool.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Button(modifier = Modifier.weight(1f), onClick = onOpenMyTasks) {
-                                Text("My Tasks")
-                            }
-                            Button(modifier = Modifier.weight(1f), onClick = onOpenTaskPool) {
-                                Text("Task Pool")
-                            }
-                        }
-                    }
-                }
-            }
-
-            // SECTION 5: Testing & Development
             item {
                 OutlinedCard(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("Testing & Development", style = MaterialTheme.typography.titleMedium)
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("Rapid test mode", style = MaterialTheme.typography.bodyLarge)
-                                Text(
-                                    "Show test prompts every 15 seconds for fast testing.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                        sectionHeader("Active Categories", categoriesExpanded) {
+                            categoriesExpanded = !categoriesExpanded
+                        }
+                        if (categoriesExpanded) {
+                            Text(
+                                "Choose which task categories are eligible for daily task prompts.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            categories.forEach { category ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Checkbox(
+                                        checked = category in selectedCategories,
+                                        onCheckedChange = { checked ->
+                                            selectedCategories = if (checked) selectedCategories + category else selectedCategories - category
+                                        }
+                                    )
+                                    Text(category)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            item {
+                OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        sectionHeader("Prompting Schedule", scheduleExpanded) {
+                            scheduleExpanded = !scheduleExpanded
+                        }
+                        if (scheduleExpanded) {
+                            Text(
+                                "Configure your active daily window and prompt frequency.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            OutlinedTextField(
+                                value = startHour,
+                                onValueChange = { startHour = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("Start hour (0-23)") },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+                                keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Down) })
+                            )
+                            OutlinedTextField(
+                                value = endHour,
+                                onValueChange = { endHour = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("End hour (0-23)") },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+                                keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Down) })
+                            )
+                            OutlinedTextField(
+                                value = promptsPerDay,
+                                onValueChange = { promptsPerDay = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("Prompts per day") },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+                                keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Down) })
+                            )
+                            OutlinedTextField(
+                                value = maxQueueSize,
+                                onValueChange = { maxQueueSize = it.filter(Char::isDigit) },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("Task queue size") },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+                                keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() })
+                            )
+                        }
+                    }
+                }
+            }
+
+            item {
+                OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        sectionHeader("Local Task Management", localTasksExpanded) {
+                            localTasksExpanded = !localTasksExpanded
+                        }
+                        if (localTasksExpanded) {
+                            Text(
+                                "View, create, or edit your local custom tasks and task pool.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Button(modifier = Modifier.weight(1f), onClick = onOpenMyTasks) {
+                                    Text("My Tasks")
+                                }
+                                Button(modifier = Modifier.weight(1f), onClick = onOpenTaskPool) {
+                                    Text("Task Pool")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            item {
+                OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        sectionHeader("Testing & Development", testingExpanded) {
+                            testingExpanded = !testingExpanded
+                        }
+                        if (testingExpanded) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Rapid test mode", style = MaterialTheme.typography.bodyLarge)
+                                    Text(
+                                        "Show test prompts every 15 seconds for fast testing.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Checkbox(
+                                    checked = rapidTestMode,
+                                    onCheckedChange = { rapidTestMode = it }
                                 )
                             }
-                            Checkbox(
-                                checked = rapidTestMode,
-                                onCheckedChange = { rapidTestMode = it }
-                            )
                         }
                     }
                 }
@@ -764,11 +824,28 @@ fun SettingsScreen(
             onDismissRequest = { showQrScannerDialog = false },
             title = { Text("Scan Sheet QR Code") },
             text = {
-                Text("Point your camera at your Google Sheet QR code from the onboarding page, or paste your Google Sheet URL directly into the field above.")
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("Paste the QR result or sheet URL here to populate the spreadsheet link.")
+                    OutlinedTextField(
+                        value = qrEntry,
+                        onValueChange = { qrEntry = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Sheet URL") },
+                        singleLine = true
+                    )
+                }
             },
             confirmButton = {
+                Button(onClick = {
+                    sheetUrl = qrEntry.trim()
+                    showQrScannerDialog = false
+                }) {
+                    Text("Use This URL")
+                }
+            },
+            dismissButton = {
                 Button(onClick = { showQrScannerDialog = false }) {
-                    Text("OK")
+                    Text("Cancel")
                 }
             }
         )
@@ -1039,6 +1116,113 @@ private val fallbackPromptTasks = listOf(
     ManagedTask("fallback-counter", "Wipe the kitchen counter", "Cleaning", 5, true),
     ManagedTask("fallback-message", "Reply to one message", "Admin/Paperwork", 15, true)
 )
+
+fun normalizeGoogleSheetCsvUrl(rawUrl: String): String {
+    val trimmed = rawUrl.trim()
+    if (trimmed.isEmpty()) return trimmed
+
+    return runCatching {
+        val withoutHash = trimmed.substringBefore('#')
+        val fragment = trimmed.substringAfter('#', "")
+        val withoutUsp = withoutHash.replace("?usp=sharing", "")
+        val parsed = URL(withoutUsp)
+        val path = parsed.path
+        val host = parsed.host ?: ""
+
+        val queryParams = (parsed.query ?: "")
+            .split("&")
+            .filter { it.isNotBlank() }
+            .associate { part ->
+                val pieces = part.split("=", limit = 2)
+                val key = pieces.firstOrNull() ?: ""
+                val value = pieces.getOrNull(1) ?: ""
+                key to value
+            }
+
+        val fragmentParams = fragment
+            .split("&")
+            .filter { it.isNotBlank() }
+            .associate { part ->
+                val pieces = part.split("=", limit = 2)
+                val key = pieces.firstOrNull() ?: ""
+                val value = pieces.getOrNull(1) ?: ""
+                key to value
+            }
+
+        val gid = queryParams["gid"] ?: fragmentParams["gid"] ?: ""
+        if (host.endsWith("docs.google.com") && path.contains("/spreadsheets/") && path.contains("/d/")) {
+            val base = withoutUsp
+                .replace("/edit", "")
+                .replace("?usp=sharing", "")
+                .replace("&usp=sharing", "")
+                .trimEnd('?')
+            if (gid.isNotBlank()) {
+                "$base/export?format=csv&gid=$gid"
+            } else {
+                "$base/export?format=csv"
+            }
+        } else {
+            trimmed
+        }
+    }.getOrDefault(trimmed)
+}
+
+fun parseExternalTaskCsv(csvText: String, categoryName: String): List<ManagedTask> {
+    if (csvText.isBlank()) return emptyList()
+
+    val rows = csvText.lineSequence()
+        .map { it.trim() }
+        .filter { it.isNotBlank() }
+        .map { row ->
+            val cells = row.split(",").map { value ->
+                value.trim().removeSurrounding("\"", "\"").trim()
+            }
+            cells
+        }
+        .toList()
+
+    if (rows.isEmpty()) return emptyList()
+
+    val header = rows.first().map { it.lowercase() }
+    val descriptionIndex = header.indexOfFirst { it.contains("description") }
+    val enabledIndex = header.indexOfFirst { it.contains("checkbox") || it.contains("enabled") }
+    val linkIndex = header.indexOfFirst { it.contains("link") || it.contains("url") }
+
+    if (descriptionIndex == -1) return emptyList()
+
+    return rows.drop(1).mapNotNull { row ->
+        if (row.size <= descriptionIndex) return@mapNotNull null
+        val description = row[descriptionIndex].trim()
+        if (description.isEmpty()) return@mapNotNull null
+        val enabled = row.getOrNull(enabledIndex)?.equals("true", ignoreCase = true)
+            ?: true
+        val link = row.getOrNull(linkIndex).orEmpty().trim()
+        ManagedTask(
+            id = "external-${categoryName}-${description.hashCode()}-${System.currentTimeMillis()}",
+            description = description,
+            category = categoryName,
+            durationMinutes = 5,
+            builtIn = false,
+            enabled = enabled,
+            temporarilyUnavailable = false,
+            neverSuggest = false
+        )
+    }
+}
+
+fun importExternalTasksFromSheet(url: String): List<ManagedTask> {
+    val normalizedUrl = normalizeGoogleSheetCsvUrl(url)
+    if (normalizedUrl.isBlank()) return emptyList()
+
+    return runCatching {
+        val csv = URL(normalizedUrl).readText()
+        val rows = csv.lineSequence().filter { it.isNotBlank() }.toList()
+        if (rows.isEmpty()) return emptyList()
+
+        val categoryName = "Imported"
+        parseExternalTaskCsv(csv, categoryName)
+    }.getOrDefault(emptyList())
+}
 
 private val taskCategories = listOf(
     "Decluttering", "Cleaning", "Admin/Paperwork", "Finances", "Health", "Errands"

@@ -26,8 +26,7 @@ function setupMicroTaskingSheet() {
     ["   - You can add new tabs, rename existing tabs, or delete tabs you don't need."],
     [""],
     ["2. COLUMNS IN TASK TABS:"],
-    ["   - Column A (Row 1 Master Toggle / Checkbox): Cell A1 controls all checkboxes in Column A below it."],
-    ["     Check A1 to enable all tasks in the category, or uncheck A1 to disable all tasks."],
+    ["   - Column A (Master Toggle / Enabled): A1 toggles all rows in the tab; each row below also has its own independent checkbox."],
     ["   - Column B (Description): The text description of the micro-task."],
     ["   - Column C (Link): Optional URL (e.g. video tutorial, document, or web tool)."],
     [""],
@@ -208,8 +207,9 @@ function setupMicroTaskingSheet() {
     var sheet = ss.getSheetByName(cat.name) || ss.insertSheet(cat.name);
     sheet.clear();
     
-    // Set headers
-    sheet.getRange("A1").setValue(true).insertCheckboxes(); // A1 Master Checkbox
+    // Set headers. A1 is the master toggle; rows 2+ are independent, but can all be synced together.
+    sheet.getRange("A1").setValue(true).insertCheckboxes();
+    sheet.getRange("A1").setFontWeight("bold");
     sheet.getRange("B1").setValue("description").setFontWeight("bold");
     sheet.getRange("C1").setValue("link").setFontWeight("bold");
     
@@ -218,14 +218,20 @@ function setupMicroTaskingSheet() {
       // Set Column B (description) and Column C (link)
       sheet.getRange(2, 2, numTasks, 2).setValues(cat.tasks);
       
-      // Set Column A formulas `=A$1` and format as Checkboxes
-      var formulas = [];
+      // Each task row gets its own independent checkbox, while A1 remains the master toggle.
+      var rowValues = [];
       for (var i = 0; i < numTasks; i++) {
-        formulas.push(["=A$1"]);
+        rowValues.push([true]);
       }
       var checkboxRange = sheet.getRange(2, 1, numTasks, 1);
-      checkboxRange.setFormulas(formulas);
+      checkboxRange.setValues(rowValues);
       checkboxRange.insertCheckboxes();
+
+      // Keep the master checkbox in A1 synchronized with the whole tab.
+      var masterToggle = sheet.getRange("A1");
+      if (!masterToggle.getValue()) {
+        checkboxRange.setValues(Array(numTasks).fill([false]));
+      }
     }
     
     sheet.setColumnWidth(1, 40);
@@ -240,4 +246,20 @@ function setupMicroTaskingSheet() {
   }
   
   SpreadsheetApp.getUi().alert("MicroTasking Sheet Setup Complete! README and all 6 categories have been created.");
+}
+
+function onEdit(e) {
+  var range = e.range;
+  var sheet = range.getSheet();
+  if (!sheet) return;
+
+  if (range.getA1Notation() !== "A1") return;
+
+  var value = range.getValue();
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return;
+
+  var rowCount = lastRow - 1;
+  var toggleRange = sheet.getRange(2, 1, rowCount, 1);
+  toggleRange.setValues(Array(rowCount).fill([Boolean(value)]));
 }

@@ -37,8 +37,7 @@ README_CONTENT = [
     ["   - You can add new tabs, rename existing tabs, or delete tabs you don't need."],
     [""],
     ["2. COLUMNS IN TASK TABS:"],
-    ["   - Column A (Row 1 Master Toggle / Checkbox): Cell A1 controls all checkboxes in Column A below it."],
-    ["     Check A1 to enable all tasks in the category, or uncheck A1 to disable all tasks."],
+    ["   - Column A (Master Toggle / Enabled): Cell A1 toggles the whole tab, and each task row below also has its own independent checkbox."],
     ["   - Column B (Description): The text description of the micro-task."],
     ["   - Column C (Link): Optional URL (e.g. video tutorial, document, or web tool)."],
     [""],
@@ -76,14 +75,14 @@ def main() -> None:
         title = raw_name.translate(INVALID_SHEET_TITLE_CHARS)[:31]
         sheet = workbook.create_sheet(title=title)
         
-        # Row 1: A1 = Master Checkbox (TRUE), B1 = description, C1 = link
+        # Row 1: A1 = master toggle, B1 = description, C1 = link
         sheet.cell(row=1, column=1, value=True)
         sheet.cell(row=1, column=2, value="description")
         sheet.cell(row=1, column=3, value="link")
 
         for row_index, task in enumerate(category["tasks"], start=2):
-            # Column A: Formula =A$1 so toggling cell A1 toggles all rows in Column A!
-            sheet.cell(row=row_index, column=1, value="=A$1")
+            # Each task row has its own independent checkbox value, while A1 remains the master toggle.
+            sheet.cell(row=row_index, column=1, value=True)
             sheet.cell(row=row_index, column=2, value=task["description"])
             link = task.get("link", "")
             link_cell = sheet.cell(row=row_index, column=3, value=link or None)
