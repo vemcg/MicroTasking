@@ -211,13 +211,15 @@ def main() -> None:
           <div class="qr-container">
             <img src="qr.png" alt="MicroTasking APK QR Code">
             <br>
-            <a href="{args.url}" class="btn" download="MicroTasking-{args.version}.apk">Download APK (v{args.version})</a>
+            <a href="{args.url}" class="btn" target="_blank" rel="noopener">Download APK (v{args.version})</a>
+            <br>
+            <a href="{args.url}" target="_blank" rel="noopener">Open the download again</a>
           </div>
         </li>
         <li>
           <strong>Allow Sideloading (First Time Only):</strong>
           <ul>
-            <li>Open your downloads and tap the <code>.apk</code> file.</li>
+            <li>After tapping <strong>Download anyway</strong>, open your browser's <strong>Downloads</strong> list or the Android <strong>Files</strong> app and tap the downloaded <code>.apk</code> file. The browser may not open the installer automatically.</li>
             <li>If Android displays <em>"For your security, your phone is not allowed to install unknown apps from this source"</em>, tap <strong>Settings</strong>, toggle <strong>Allow from this source</strong> to ON, then go back and tap <strong>Install</strong>.</li>
             <li>If Google Play Protect displays a warning, tap <strong>More details &rarr; Install anyway</strong>.</li>
           </ul>
