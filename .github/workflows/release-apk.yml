@@ -24,17 +24,20 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Build debug APK
-        run: ./gradlew assembleDebug
-
-      - name: Determine version/tag
+      - name: Determine timestamped version/tag
         id: version
         run: |
-          VERSION_NAME=$(grep -m1 'versionName' app/build.gradle.kts | sed -E 's/.*"([^"]+)".*/\1/')
-          TAG="v${VERSION_NAME}-${{ github.run_number }}"
+          BUILD_TIMESTAMP=$(date -u +%Y%m%d%H%M%S)
+          VERSION_NAME="0.1.6-${BUILD_TIMESTAMP}"
+          VERSION_CODE=$(date -u +%s)
+          TAG="v${VERSION_NAME}"
           echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "asset_name=MicroTasking-$TAG.apk" >> "$GITHUB_OUTPUT"
+
+      - name: Build debug APK
+        run: ./gradlew assembleDebug -PbuildVersionName="${{ steps.version.outputs.version_name }}" -PbuildVersionCode="${{ steps.version.outputs.version_code }}"
 
       - name: Stage APK
         run: |

@@ -1,7 +1,17 @@
+import java.time.Instant
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
+
+val buildInstant = Instant.now()
+val defaultVersionCode = buildInstant.epochSecond.toInt()
+val defaultVersionName = "0.1.6-" + DateTimeFormatter.ofPattern("yyyyMMddHHmmss")
+    .withZone(ZoneOffset.UTC)
+    .format(buildInstant)
 
 android {
     namespace = "com.microtasking.app"
@@ -11,8 +21,8 @@ android {
         applicationId = "com.microtasking.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 7
-        versionName = "0.1.7"
+        versionCode = providers.gradleProperty("buildVersionCode").map(String::toInt).orElse(defaultVersionCode).get()
+        versionName = providers.gradleProperty("buildVersionName").orElse(defaultVersionName).get()
     }
 
     signingConfigs {
