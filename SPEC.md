@@ -171,7 +171,7 @@ deliberate — just do the task immediately.
   `main` builds a debug APK, tags/publishes it as a GitHub Release, generates a QR code image
   pointing at that release's direct download URL (`scripts/generate_install_page.py`), and
   publishes a small install page + QR to GitHub Pages (`gh-pages` branch, `docs/` folder). Each
-  push produces a new tag (`v<versionName>-<run number>`), so the QR always points at the
+  push produces a new tag (`v0.1.7-<run number>-<UTC yyyymmdd.HHmmss>-<short commit>`), so the QR always points at the
   latest build.
 - Debug builds are signed with a **checked-in debug keystore** (`keystore/debug.keystore`, not
   a secret — Android debug keys are never meant to be secret) so every CI build shares the same

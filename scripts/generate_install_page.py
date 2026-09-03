@@ -211,7 +211,7 @@ def main() -> None:
           <div class="qr-container">
             <img src="qr.png" alt="MicroTasking APK QR Code">
             <br>
-            <a href="{args.url}" class="btn">Direct Download APK (v{args.version})</a>
+            <a href="{args.url}" class="btn" download="MicroTasking-{args.version}.apk">Download APK (v{args.version})</a>
           </div>
         </li>
         <li>

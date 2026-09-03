@@ -28,7 +28,10 @@ jobs:
         id: version
         run: |
           BUILD_TIMESTAMP=$(date -u +%Y%m%d%H%M%S)
-          VERSION_NAME="0.1.6-${BUILD_TIMESTAMP}"
+          BUILD_DATE=${BUILD_TIMESTAMP:0:8}
+          BUILD_TIME=${BUILD_TIMESTAMP:8:6}
+          SHORT_SHA=$(git rev-parse --short=7 "$GITHUB_SHA")
+          VERSION_NAME="0.1.7-${{ github.run_number }}-${BUILD_DATE}.${BUILD_TIME}-${SHORT_SHA}"
           VERSION_CODE=$(date -u +%s)
           TAG="v${VERSION_NAME}"
           echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"

@@ -9,7 +9,7 @@ plugins {
 
 val buildInstant = Instant.now()
 val defaultVersionCode = buildInstant.epochSecond.toInt()
-val defaultVersionName = "0.1.6-" + DateTimeFormatter.ofPattern("yyyyMMddHHmmss")
+val defaultVersionName = "0.1.7-0-" + DateTimeFormatter.ofPattern("yyyyMMdd.HHmmss")
     .withZone(ZoneOffset.UTC)
     .format(buildInstant)
 
