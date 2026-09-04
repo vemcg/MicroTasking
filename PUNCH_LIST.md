@@ -2,18 +2,28 @@
 
 Next work session: make onboarding, import, persistence, versioning, and update behavior production-ready.
 
-1. **Empty first install**
-   - A fresh installation starts with no categories and no tasks.
-   - Do not seed built-in tasks or categories until the user imports or creates them.
+1. **Empty first install** — DONE (2026-09-03)
+   - `selected_categories` now defaults to an empty set (was `{Decluttering, Cleaning}`).
+   - Removed the `seedTasks`/`loadSeedTasks(assets/tasks.json)` and `fallbackPromptTasks`
+     fallbacks that populated the pool with built-in tasks when none were saved/eligible yet;
+     a fresh install now starts with zero categories selected and zero tasks in the pool.
+   - The category taxonomy is no longer a hardcoded list either (see item 2) - it's now
+     derived from whatever tasks currently exist, so it's also empty until import/creation.
 
-2. **Google Sheet task source and onboarding**
-   - Tasks are maintained on the computer in a Google Sheet.
-   - The user pastes the Sheet URL into the onboarding page.
-   - The onboarding page generates a QR code from that URL.
-   - The phone uses the QR flow to import the tasks.
-   - Do not require pasting the Sheet URL into the app Settings form.
-   - Do not require manually entering the URL on the phone.
-   - Clarify the intended scan mechanism before implementation: the phone must receive the generated Sheet URL/task-source payload, but the current wording says not to have the phone read a QR code with the phone.
+2. **Google Sheet task source and onboarding** — DONE (2026-09-03)
+   - Categories are now driven by Google Sheet tab names: `importExternalTasksFromSheet`
+     fetches the spreadsheet's worksheet feed to list tab names, fetches each tab's rows by
+     name via the `gviz/tq` CSV export, and uses each tab name as the task category. A tab
+     named `README` (case-insensitive) is skipped and never becomes a category.
+   - Import now runs on a background coroutine (`Dispatchers.IO`) instead of blocking the
+     main thread, and Settings shows a real "Importing..." / result message instead of a
+     fire-and-forget "Import started." label.
+   - Settings/Task Pool/My Tasks no longer offer a fixed hardcoded category list - available
+     categories are derived from whatever's currently in the pool, so category options only
+     appear once a Sheet has been imported (or a task created locally with a custom category).
+   - Still open: the in-app "Scan QR Code to Load URL" control is a paste-the-result dialog,
+     not an actual camera scan - real camera-based QR scanning (e.g. CameraX + ML Kit barcode
+     scanning) is unimplemented and is a separate, larger follow-up.
 
 3. **Unreliable updates**
    - Diagnose and fix updates that sometimes or often hang.
@@ -32,20 +42,7 @@ Next work session: make onboarding, import, persistence, versioning, and update 
    - Document exactly what Synchronize does on later uses.
    - Define replacement/merge behavior, task identity, changed descriptions, deleted rows, categories, enabled checkboxes, and offline/error behavior.
 
-6. **Redefine versioning** — DONE (2026-09-03)
-   - Human-facing version shown in the app is short: `v0.1.7-11` (base app version + unpadded
-     build/run number). Full provenance (`yyyymmdd.HHmmss` UTC build timestamp + short Git
-     commit hash) is generated at build time but only surfaced in Settings > About & Testing,
-     not embedded in the main version string.
-   - `versionCode` stays a single monotonically increasing integer (UTC epoch seconds at build
-     time), independent of the display string, so Android's update check is always numeric.
-   - Added `VersionInfo.kt`: parses "major.minor.patch-buildNumber" and compares component by
-     component (numeric build-number compare), so "10" never sorts below "2" the way it would
-     under lexical string comparison.
-   - CI (`release-apk.yml`) now passes `buildVersionBase`/`buildNumber`/`buildTimestamp`/
-     `buildGitSha` to Gradle; release tags are the short `v0.1.7-<run_number>` form.
-
-7. **Bulletproof onboarding, install, and update**
+6. **Bulletproof onboarding, install, and update**
    - Test the complete path from onboarding page to APK download to installation/update.
    - Make failures visible with actionable messages and retry paths.
    - Validate APK URL, release asset existence, signing certificate, version code, and generated QR payload.

@@ -50,6 +50,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,7 +61,10 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.material3.lightColorScheme
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -86,7 +90,7 @@ class MainActivity : ComponentActivity() {
                         setupComplete = preferences.getBoolean("setup_complete", false),
                         selectedCategories = preferences.getStringSet(
                             "selected_categories",
-                            setOf("Decluttering", "Cleaning")
+                            emptySet()
                         ) ?: emptySet(),
                         startHour = preferences.getString("start_hour", "9") ?: "9",
                         endHour = preferences.getString("end_hour", "21") ?: "21",
@@ -97,7 +101,6 @@ class MainActivity : ComponentActivity() {
                         managedTasks = readManagedTasks(
                             preferences.getString("managed_tasks", "[]") ?: "[]"
                         ),
-                        seedTasks = loadSeedTasks(this),
                         declineCounts = readDeclineCounts(
                             preferences.getString("task_decline_counts", "{}") ?: "{}"
                         ),
@@ -181,7 +184,6 @@ fun MicroTaskingApp(
     externalSheetUrl: String,
     userTasks: List<UserTask>,
     managedTasks: List<ManagedTask>,
-    seedTasks: List<ManagedTask>,
     declineCounts: Map<String, Int>,
     onSettingsSaved: (Set<String>, String, String, String, Boolean, Int, String) -> Unit,
     onUserTasksSaved: (List<UserTask>) -> Unit,
@@ -201,14 +203,18 @@ fun MicroTaskingApp(
     var savedMaxQueueSize by remember { mutableIntStateOf(maxQueueSize) }
     var savedSheetUrl by remember { mutableStateOf(externalSheetUrl) }
     var savedUserTasks by remember { mutableStateOf(userTasks) }
-    var savedManagedTasks by remember {
-        mutableStateOf(if (managedTasks.isEmpty()) seedTasks else managedTasks)
-    }
+    var savedManagedTasks by remember { mutableStateOf(managedTasks) }
     var savedDeclineCounts by remember { mutableStateOf(declineCounts) }
     var completedCount by remember { mutableIntStateOf(0) }
     var attemptedCount by remember { mutableIntStateOf(0) }
     var lastTaskCompleted by remember { mutableStateOf(true) }
     var backgroundPromptsRunning by remember { mutableStateOf(true) }
+    var isImportingSheet by remember { mutableStateOf(false) }
+    var sheetImportMessage by remember { mutableStateOf<String?>(null) }
+    val coroutineScope = rememberCoroutineScope()
+    val availableCategories = (savedManagedTasks.map { it.category } + savedUserTasks.map { it.category })
+        .distinct()
+        .sorted()
     val promptTasks = eligiblePromptTasks(savedManagedTasks, savedUserTasks, savedCategories)
     var taskQueue by remember(promptTasks, savedMaxQueueSize) {
         mutableStateOf(makeTaskStack(promptTasks, maxEntries = savedMaxQueueSize))
@@ -256,6 +262,7 @@ fun MicroTaskingApp(
     } else if (showingMyTasks) {
         MyTasksScreen(
             tasks = savedUserTasks,
+            existingCategories = availableCategories,
             onBack = { showingMyTasks = false },
             onTasksChanged = { updatedTasks ->
                 savedUserTasks = updatedTasks
@@ -265,21 +272,35 @@ fun MicroTaskingApp(
     } else if (showingSettings) {
         SettingsScreen(
             initialCategories = savedCategories,
+            availableCategories = availableCategories,
             initialStartHour = savedStartHour,
             initialEndHour = savedEndHour,
             initialPromptsPerDay = savedPromptsPerDay,
             initialRapidTestMode = savedRapidTestMode,
             initialMaxQueueSize = savedMaxQueueSize,
             initialSheetUrl = savedSheetUrl,
+            isImportingSheet = isImportingSheet,
+            importMessage = sheetImportMessage,
             onOpenMyTasks = { showingMyTasks = true },
             onOpenTaskPool = { showingTaskPool = true },
             onSyncSheet = { url ->
-                val importedTasks = importExternalTasksFromSheet(url)
-                if (importedTasks.isNotEmpty()) {
-                    savedManagedTasks = importedTasks + savedManagedTasks.filter { task ->
-                        task.category !in importedTasks.map { it.category }
+                isImportingSheet = true
+                sheetImportMessage = null
+                coroutineScope.launch {
+                    val importedTasks = withContext(Dispatchers.IO) {
+                        importExternalTasksFromSheet(url)
                     }
-                    onManagedTasksSaved(savedManagedTasks)
+                    isImportingSheet = false
+                    if (importedTasks.isNotEmpty()) {
+                        savedManagedTasks = importedTasks + savedManagedTasks.filter { task ->
+                            task.category !in importedTasks.map { it.category }
+                        }
+                        onManagedTasksSaved(savedManagedTasks)
+                        val categoryCount = importedTasks.map { it.category }.distinct().size
+                        sheetImportMessage = "Imported ${importedTasks.size} tasks across $categoryCount categories."
+                    } else {
+                        sheetImportMessage = "No tasks found. Check the Sheet URL, sharing settings, and tab names."
+                    }
                 }
             },
             onSave = { categories, start, end, prompts, rapidMode, queueSize, sheetUrl ->
@@ -544,18 +565,20 @@ fun ScoreScreen(
 @Composable
 fun SettingsScreen(
     initialCategories: Set<String>,
+    availableCategories: List<String>,
     initialStartHour: String,
     initialEndHour: String,
     initialPromptsPerDay: String,
     initialRapidTestMode: Boolean,
     initialMaxQueueSize: Int,
     initialSheetUrl: String = "",
+    isImportingSheet: Boolean = false,
+    importMessage: String? = null,
     onOpenMyTasks: () -> Unit,
     onOpenTaskPool: () -> Unit,
     onSyncSheet: (String) -> Unit,
     onSave: (Set<String>, String, String, String, Boolean, Int, String) -> Unit
 ) {
-    val categories = listOf("Decluttering", "Cleaning", "Paperwork", "Admin/Paperwork", "Finances", "Health", "Errands")
     var selectedCategories by remember { mutableStateOf(initialCategories) }
     var startHour by remember { mutableStateOf(initialStartHour) }
     var endHour by remember { mutableStateOf(initialEndHour) }
@@ -565,7 +588,6 @@ fun SettingsScreen(
     var sheetUrl by remember { mutableStateOf(initialSheetUrl) }
     var showQrScannerDialog by remember { mutableStateOf(false) }
     var qrEntry by remember { mutableStateOf(initialSheetUrl) }
-    var externalImportMessage by remember { mutableStateOf<String?>(null) }
     var categoriesExpanded by remember { mutableStateOf(true) }
     var scheduleExpanded by remember { mutableStateOf(true) }
     var externalPoolExpanded by remember { mutableStateOf(true) }
@@ -614,7 +636,7 @@ fun SettingsScreen(
                         }
                         if (externalPoolExpanded) {
                             Text(
-                                "Paste your Google Sheet URL first. The onboarding page will generate its QR code, which you can scan here to load the URL.",
+                                "Paste your Google Sheet URL first. The onboarding page will generate its QR code, which you can scan here to load the URL. Each tab in the sheet (except a tab named \"README\") becomes a task category.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -637,17 +659,14 @@ fun SettingsScreen(
                             }
                             Button(
                                 modifier = Modifier.fillMaxWidth(),
-                                enabled = sheetUrl.isNotBlank(),
-                                onClick = {
-                                    onSyncSheet(sheetUrl.trim())
-                                    externalImportMessage = "Import started."
-                                }
+                                enabled = sheetUrl.isNotBlank() && !isImportingSheet,
+                                onClick = { onSyncSheet(sheetUrl.trim()) }
                             ) {
-                                Text("Import / Synchronize")
+                                Text(if (isImportingSheet) "Importing..." else "Import / Synchronize")
                             }
-                            if (externalImportMessage != null) {
+                            if (importMessage != null) {
                                 Text(
-                                    externalImportMessage!!,
+                                    importMessage,
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.primary
                                 )
@@ -669,7 +688,14 @@ fun SettingsScreen(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            categories.forEach { category ->
+                            if (availableCategories.isEmpty()) {
+                                Text(
+                                    "No categories yet. Import your Google Sheet above to add categories (one per tab).",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            availableCategories.forEach { category ->
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     verticalAlignment = Alignment.CenterVertically
@@ -810,7 +836,7 @@ fun SettingsScreen(
                     .fillMaxWidth()
                     .padding(16.dp)
                     .navigationBarsPadding(),
-                enabled = selectedCategories.isNotEmpty(),
+                enabled = selectedCategories.isNotEmpty() || availableCategories.isEmpty(),
                 onClick = {
                     onSave(
                         selectedCategories,
@@ -868,8 +894,10 @@ fun TaskPoolScreen(
     onBack: () -> Unit,
     onTasksChanged: (List<ManagedTask>) -> Unit
 ) {
+    val poolCategories = tasks.map { it.category }.distinct().sorted()
     var categoryFilter by remember { mutableStateOf("All categories") }
     var description by remember { mutableStateOf("") }
+    var newTaskCategory by remember { mutableStateOf("") }
     var duration by remember { mutableStateOf("5") }
     var editingTask by remember { mutableStateOf<ManagedTask?>(null) }
     var menuExpanded by remember { mutableStateOf(false) }
@@ -897,7 +925,16 @@ fun TaskPoolScreen(
                     style = MaterialTheme.typography.titleMedium
                 )
             }
-            items(taskCategories) { category ->
+            if (poolCategories.isEmpty()) {
+                item {
+                    Text(
+                        "No categories yet. Import a Google Sheet from Settings, or add a task below.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            items(poolCategories) { category ->
                 Text("$category: ${tasks.count { it.category == category && it.enabled && !it.temporarilyUnavailable && !it.neverSuggest }} active")
             }
             item {
@@ -907,7 +944,7 @@ fun TaskPoolScreen(
             }
             item {
                 DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
-                    (listOf("All categories") + taskCategories).forEach { option ->
+                    (listOf("All categories") + poolCategories).forEach { option ->
                         DropdownMenuItem(text = { Text(option) }, onClick = {
                             categoryFilter = option
                             menuExpanded = false
@@ -921,6 +958,13 @@ fun TaskPoolScreen(
                     label = { Text("New task") }
                 )
                 OutlinedTextField(
+                    value = newTaskCategory,
+                    onValueChange = { newTaskCategory = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Category") },
+                    placeholder = { Text("e.g. Cleaning") }
+                )
+                OutlinedTextField(
                     value = duration,
                     onValueChange = { duration = it.filter(Char::isDigit) },
                     modifier = Modifier.fillMaxWidth(),
@@ -928,17 +972,17 @@ fun TaskPoolScreen(
                 )
                 Button(
                     modifier = Modifier.fillMaxWidth(),
-                    enabled = description.isNotBlank() && duration.toIntOrNull() in setOf(5, 10, 15),
+                    enabled = description.isNotBlank() && newTaskCategory.isNotBlank() && duration.toIntOrNull() in setOf(5, 10, 15),
                     onClick = {
-                        val category = if (categoryFilter == "All categories") taskCategories.first() else categoryFilter
                         onTasksChanged(tasks + ManagedTask(
                             id = "custom-${System.currentTimeMillis()}",
                             description = description.trim(),
-                            category = category,
+                            category = newTaskCategory.trim(),
                             durationMinutes = duration.toInt(),
                             builtIn = false
                         ))
                         description = ""
+                        newTaskCategory = ""
                         duration = "5"
                     }
                 ) {
@@ -1027,11 +1071,12 @@ fun TaskEditorDialog(task: ManagedTask, onDismiss: () -> Unit, onSave: (ManagedT
 @Composable
 fun MyTasksScreen(
     tasks: List<UserTask>,
+    existingCategories: List<String>,
     onBack: () -> Unit,
     onTasksChanged: (List<UserTask>) -> Unit
 ) {
     var description by remember { mutableStateOf("") }
-    var category by remember { mutableStateOf(taskCategories.first()) }
+    var category by remember { mutableStateOf(existingCategories.firstOrNull() ?: "") }
     var categoryMenuExpanded by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -1057,17 +1102,21 @@ fun MyTasksScreen(
                 modifier = Modifier.fillMaxWidth(),
                 label = { Text("New task") }
             )
-            Button(
+            OutlinedTextField(
+                value = category,
+                onValueChange = { category = it },
                 modifier = Modifier.fillMaxWidth(),
-                onClick = { categoryMenuExpanded = true }
-            ) {
-                Text("Category: $category")
-            }
+                label = { Text("Category") },
+                placeholder = { Text("e.g. Cleaning") },
+                trailingIcon = if (existingCategories.isNotEmpty()) {
+                    { IconButton(onClick = { categoryMenuExpanded = true }) { Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Pick existing category") } }
+                } else null
+            )
             DropdownMenu(
                 expanded = categoryMenuExpanded,
                 onDismissRequest = { categoryMenuExpanded = false }
             ) {
-                taskCategories.forEach { categoryOption ->
+                existingCategories.forEach { categoryOption ->
                     DropdownMenuItem(
                         text = { Text(categoryOption) },
                         onClick = {
@@ -1079,9 +1128,9 @@ fun MyTasksScreen(
             }
             Button(
                 modifier = Modifier.fillMaxWidth(),
-                enabled = description.isNotBlank(),
+                enabled = description.isNotBlank() && category.isNotBlank(),
                 onClick = {
-                    onTasksChanged(tasks + UserTask(description.trim(), category, true))
+                    onTasksChanged(tasks + UserTask(description.trim(), category.trim(), true))
                     description = ""
                 }
             ) {
@@ -1118,13 +1167,6 @@ fun MyTasksScreen(
         }
     }
 }
-
-private val fallbackPromptTasks = listOf(
-    ManagedTask("fallback-surface", "Clear one small surface", "Decluttering", 5, true),
-    ManagedTask("fallback-papers", "File three papers", "Admin/Paperwork", 10, true),
-    ManagedTask("fallback-counter", "Wipe the kitchen counter", "Cleaning", 5, true),
-    ManagedTask("fallback-message", "Reply to one message", "Admin/Paperwork", 15, true)
-)
 
 fun normalizeGoogleSheetCsvUrl(rawUrl: String): String {
     val trimmed = rawUrl.trim()
@@ -1219,23 +1261,43 @@ fun parseExternalTaskCsv(csvText: String, categoryName: String): List<ManagedTas
     }
 }
 
+private fun extractGoogleSheetId(url: String): String? =
+    Regex("/spreadsheets/d/([a-zA-Z0-9_-]+)").find(url)?.groupValues?.getOrNull(1)
+
+/** Lists the spreadsheet's tab names in order, via the legacy public worksheet feed (no auth needed for "Anyone with the link" sheets). */
+private fun fetchSheetTabNames(spreadsheetId: String): List<String> = runCatching {
+    val feedUrl = "https://spreadsheets.google.com/feeds/worksheets/$spreadsheetId/public/basic?alt=json"
+    val feed = JSONObject(URL(feedUrl).readText()).optJSONObject("feed") ?: return@runCatching emptyList()
+    val entries = when (val entry = feed.opt("entry")) {
+        is JSONArray -> entry
+        is JSONObject -> JSONArray().put(entry)
+        else -> JSONArray()
+    }
+    List(entries.length()) { index -> entries.getJSONObject(index).getJSONObject("title").getString("\$t") }
+}.getOrDefault(emptyList())
+
+/** Fetches one tab's rows as CSV, addressed by tab name rather than gid. */
+private fun fetchSheetTabCsv(spreadsheetId: String, tabName: String): String = runCatching {
+    val encodedName = URLEncoder.encode(tabName, "UTF-8")
+    val url = "https://docs.google.com/spreadsheets/d/$spreadsheetId/gviz/tq?tqx=out:csv&sheet=$encodedName"
+    URL(url).readText()
+}.getOrDefault("")
+
 fun importExternalTasksFromSheet(url: String): List<ManagedTask> {
-    val normalizedUrl = normalizeGoogleSheetCsvUrl(url)
-    if (normalizedUrl.isBlank()) return emptyList()
+    val spreadsheetId = extractGoogleSheetId(url) ?: return emptyList()
+    val tabNames = fetchSheetTabNames(spreadsheetId).filter { !it.equals("README", ignoreCase = true) }
 
+    if (tabNames.isNotEmpty()) {
+        return tabNames.flatMap { tabName -> parseExternalTaskCsv(fetchSheetTabCsv(spreadsheetId, tabName), tabName) }
+    }
+
+    // Worksheet feed unavailable (e.g. sharing settings blocked it) - fall back to a single
+    // CSV export so import still works, just without per-tab categories.
     return runCatching {
-        val csv = URL(normalizedUrl).readText()
-        val rows = csv.lineSequence().filter { it.isNotBlank() }.toList()
-        if (rows.isEmpty()) return emptyList()
-
-        val categoryName = "Imported"
-        parseExternalTaskCsv(csv, categoryName)
+        val csv = URL(normalizeGoogleSheetCsvUrl(url)).readText()
+        parseExternalTaskCsv(csv, "Imported")
     }.getOrDefault(emptyList())
 }
-
-private val taskCategories = listOf(
-    "Decluttering", "Cleaning", "Admin/Paperwork", "Finances", "Health", "Errands"
-)
 
 data class UserTask(val description: String, val category: String, val enabled: Boolean)
 
@@ -1260,7 +1322,7 @@ private fun eligiblePromptTasks(
                 builtIn = false
             )
         }
-    return (managedEligibleTasks + legacyEligibleTasks).ifEmpty { fallbackPromptTasks }
+    return managedEligibleTasks + legacyEligibleTasks
 }
 
 private fun readUserTasks(json: String): List<UserTask> = runCatching {
