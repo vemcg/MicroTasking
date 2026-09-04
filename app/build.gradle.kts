@@ -32,11 +32,25 @@ fun currentGitShortSha(): String = try {
 
 val gitShortSha = providers.gradleProperty("buildGitSha").orElse(currentGitShortSha()).get()
 
+fun currentGitBranch(): String = try {
+    val process = ProcessBuilder("git", "rev-parse", "--abbrev-ref", "HEAD")
+        .directory(rootDir)
+        .redirectErrorStream(true)
+        .start()
+    val output = process.inputStream.bufferedReader().readText().trim()
+    process.waitFor()
+    output.ifBlank { "unknown" }
+} catch (e: Exception) {
+    "unknown"
+}
+
+val gitBranch = providers.gradleProperty("buildGitBranch").orElse(currentGitBranch()).get()
+
 // Short, human-facing version: base + unpadded build number only (e.g. "0.1.7-11").
 // Full provenance (timestamp, commit) is exposed separately via BuildConfig for display
 // in Settings, rather than being embedded in versionName.
 val shortVersionName = "$versionBase-$buildNumber"
-val fullVersionLabel = "v$shortVersionName-$buildTimestamp-$gitShortSha"
+val fullVersionLabel = "v$shortVersionName-$buildTimestamp-$gitShortSha-$gitBranch"
 
 android {
     namespace = "com.microtasking.app"
@@ -55,6 +69,7 @@ android {
         buildConfigField("int", "BUILD_NUMBER", buildNumber)
         buildConfigField("String", "BUILD_TIMESTAMP", "\"$buildTimestamp\"")
         buildConfigField("String", "GIT_SHORT_SHA", "\"$gitShortSha\"")
+        buildConfigField("String", "GIT_BRANCH", "\"$gitBranch\"")
         buildConfigField("String", "FULL_VERSION_LABEL", "\"$fullVersionLabel\"")
     }
 

@@ -30,6 +30,7 @@ Next work session: make onboarding, import, persistence, versioning, and update 
 
 5. **Tasking logic**
    - Done (foreground only): prompts per day, active window, and remaining window time now drive real pacing — tasks are added to the queue one at a time at semi-random intervals computed from those settings, recalculated whenever settings are saved. See `TaskScheduling.kt`.
-   - Remaining: remove the rapid-test capability entirely (still present as a toggle), and make the same pacing drive background delivery (`PromptScheduler`/`PromptAlarmReceiver` still use a fixed 15-minute beat, not the window/quota logic).
-   - Replace the "tasks completed this session" count with a streak: consecutive tasks completed successfully, not abandoned or timed out.
-   - At the end of the active window, time out anything still sitting in the queue and reset the streak to 0 if anything was timed out. Start hour 0 and end hour 24 (or any start hour equal to end hour) mean the window never ends, so nothing is ever timed out.
+   - Done: rapid-test capability removed (checkbox, 15s loop, and the `rapid_test_mode` pref) — the About & Testing section is now just About.
+   - Done: the "tasks completed this session" count is now a streak (`Streak: N`) — increments on completion, resets to 0 on abandon, reject, or stack-eviction. Not yet persisted across restarts; that's still item 2's job.
+   - Remaining: wire background delivery (`PromptScheduler`/`PromptAlarmReceiver`, still a fixed 15-minute beat) to the same window/quota pacing logic as the foreground loop.
+   - Remaining: at the end of the active window, time out anything still sitting in the queue and reset the streak to 0 if anything was timed out. Start hour 0 and end hour 24 (or any start hour equal to end hour) mean the window never ends, so nothing is ever timed out.

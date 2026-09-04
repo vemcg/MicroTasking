@@ -42,6 +42,7 @@ jobs:
           echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "asset_name=MicroTasking-$TAG.apk" >> "$GITHUB_OUTPUT"
+          echo "git_branch=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
 
       - name: Build debug APK
         run: |
@@ -50,6 +51,7 @@ jobs:
             -PbuildNumber="${{ steps.version.outputs.build_number }}" \
             -PbuildTimestamp="${{ steps.version.outputs.build_timestamp }}" \
             -PbuildGitSha="${{ steps.version.outputs.git_sha }}" \
+            -PbuildGitBranch="${{ steps.version.outputs.git_branch }}" \
             -PbuildVersionCode="${{ steps.version.outputs.version_code }}"
 
       - name: Stage APK

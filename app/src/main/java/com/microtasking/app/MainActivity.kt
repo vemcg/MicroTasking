@@ -97,7 +97,7 @@ class MainActivity : ComponentActivity() {
         }
         if (preferences.getBoolean("setup_complete", false)) {
             preferences.edit().putBoolean("background_prompts_enabled", true).apply()
-            PromptScheduler.scheduleNext(this, preferences.getBoolean("rapid_test_mode", false))
+            PromptScheduler.scheduleNext(this)
         }
         setContent {
             MaterialTheme(colorScheme = microTaskingColorScheme) {
@@ -111,7 +111,6 @@ class MainActivity : ComponentActivity() {
                         startHour = preferences.getString("start_hour", "9") ?: "9",
                         endHour = preferences.getString("end_hour", "21") ?: "21",
                         promptsPerDay = preferences.getString("prompts_per_day", "6") ?: "6",
-                        rapidTestMode = preferences.getBoolean("rapid_test_mode", false),
                         maxQueueSize = preferences.getInt("max_task_queue_size", 3),
                         promptsDeliveredInWindow = preferences.getInt("prompts_delivered_in_window", 0),
                         promptsWindowStartEpoch = preferences.getLong("prompts_window_start_epoch", 0L),
@@ -123,19 +122,18 @@ class MainActivity : ComponentActivity() {
                             preferences.getString("task_decline_counts", "{}") ?: "{}"
                         ),
                         userTasks = readUserTasks(preferences.getString("user_tasks", "[]") ?: "[]"),
-                        onSettingsSaved = { categories, start, end, prompts, rapidMode, maxQueueSize, sheetUrl ->
+                        onSettingsSaved = { categories, start, end, prompts, maxQueueSize, sheetUrl ->
                             preferences.edit()
                                 .putBoolean("setup_complete", true)
                                 .putStringSet("selected_categories", categories)
                                 .putString("start_hour", start)
                                 .putString("end_hour", end)
                                 .putString("prompts_per_day", prompts)
-                                .putBoolean("rapid_test_mode", rapidMode)
                                 .putInt("max_task_queue_size", maxQueueSize)
                                 .putString("external_sheet_url", sheetUrl)
                                 .putBoolean("background_prompts_enabled", true)
                                 .apply()
-                            PromptScheduler.scheduleNext(this, rapidMode)
+                            PromptScheduler.scheduleNext(this)
                         },
                         onUserTasksSaved = { userTasks ->
                             preferences.edit()
@@ -166,10 +164,7 @@ class MainActivity : ComponentActivity() {
                         onBackgroundPromptsChanged = { enabled ->
                             preferences.edit().putBoolean("background_prompts_enabled", enabled).apply()
                             if (enabled) {
-                                PromptScheduler.scheduleNext(
-                                    this,
-                                    preferences.getBoolean("rapid_test_mode", false)
-                                )
+                                PromptScheduler.scheduleNext(this)
                             } else {
                                 PromptScheduler.cancel(this)
                             }
@@ -208,7 +203,6 @@ fun MicroTaskingApp(
     startHour: String,
     endHour: String,
     promptsPerDay: String,
-    rapidTestMode: Boolean,
     maxQueueSize: Int,
     promptsDeliveredInWindow: Int,
     promptsWindowStartEpoch: Long,
@@ -216,7 +210,7 @@ fun MicroTaskingApp(
     userTasks: List<UserTask>,
     managedTasks: List<ManagedTask>,
     declineCounts: Map<String, Int>,
-    onSettingsSaved: (Set<String>, String, String, String, Boolean, Int, String) -> Unit,
+    onSettingsSaved: (Set<String>, String, String, String, Int, String) -> Unit,
     onUserTasksSaved: (List<UserTask>) -> Unit,
     onManagedTasksSaved: (List<ManagedTask>) -> Unit,
     onDeclineCountsSaved: (Map<String, Int>) -> Unit,
@@ -235,7 +229,6 @@ fun MicroTaskingApp(
     var savedStartHour by remember { mutableStateOf(startHour) }
     var savedEndHour by remember { mutableStateOf(endHour) }
     var savedPromptsPerDay by remember { mutableStateOf(promptsPerDay) }
-    var savedRapidTestMode by remember { mutableStateOf(rapidTestMode) }
     var savedMaxQueueSize by remember { mutableIntStateOf(maxQueueSize) }
     var deliveredInWindow by remember { mutableIntStateOf(promptsDeliveredInWindow) }
     var windowStartEpoch by remember { mutableStateOf(promptsWindowStartEpoch) }
@@ -243,7 +236,8 @@ fun MicroTaskingApp(
     var savedUserTasks by remember { mutableStateOf(userTasks) }
     var savedManagedTasks by remember { mutableStateOf(managedTasks) }
     var savedDeclineCounts by remember { mutableStateOf(declineCounts) }
-    var completedCount by remember { mutableIntStateOf(0) }
+    var totalCompletedCount by remember { mutableIntStateOf(0) }
+    var streak by remember { mutableIntStateOf(0) }
     var attemptedCount by remember { mutableIntStateOf(0) }
     var lastTaskCompleted by remember { mutableStateOf(true) }
     var backgroundPromptsRunning by remember { mutableStateOf(true) }
@@ -267,6 +261,7 @@ fun MicroTaskingApp(
         if (activeTasks.size >= savedMaxQueueSize) {
             attemptedCount++
             lastTaskCompleted = false
+            streak = 0
         }
         taskQueue = activeTasks.takeLast(savedMaxQueueSize - 1) + TaskStackEntry(task)
         showingScore = false
@@ -299,7 +294,6 @@ fun MicroTaskingApp(
     }
 
     LaunchedEffect(
-        savedRapidTestMode,
         backgroundPromptsRunning,
         promptTasks,
         savedStartHour,
@@ -309,49 +303,37 @@ fun MicroTaskingApp(
         if (!backgroundPromptsRunning || promptTasks.isEmpty()) {
             return@LaunchedEffect
         }
-        if (savedRapidTestMode) {
-            while (true) {
-                delay(15_000)
-                val nextTask = chooseWeightedTask(
-                    tasks = promptTasks,
-                    declineCounts = savedDeclineCounts,
-                    previousTaskId = taskQueue.lastOrNull { it.isActionable() }?.task?.id
-                )
-                receiveQueuedTask(nextTask)
-            }
-        } else {
-            val windowStartHour = savedStartHour.toIntOrNull() ?: 0
-            val windowEndHour = savedEndHour.toIntOrNull() ?: 24
-            val dailyPromptTarget = savedPromptsPerDay.toIntOrNull() ?: 0
-            while (true) {
-                val now = LocalDateTime.now()
-                val windowStart = currentWindowStart(now, windowStartHour, windowEndHour).toEpochMillis()
-                if (windowStart != windowStartEpoch) {
-                    windowStartEpoch = windowStart
-                    deliveredInWindow = 0
-                    onPromptDeliveryTracked(deliveredInWindow, windowStartEpoch)
-                }
-                val delayMs = nextPromptDelayMillis(
-                    now,
-                    windowStartHour,
-                    windowEndHour,
-                    dailyPromptTarget,
-                    deliveredInWindow
-                )
-                if (delayMs == null) {
-                    delay(5 * 60_000L)
-                    continue
-                }
-                delay(delayMs)
-                val nextTask = chooseWeightedTask(
-                    tasks = promptTasks,
-                    declineCounts = savedDeclineCounts,
-                    previousTaskId = taskQueue.lastOrNull { it.isActionable() }?.task?.id
-                )
-                receiveQueuedTask(nextTask)
-                deliveredInWindow++
+        val windowStartHour = savedStartHour.toIntOrNull() ?: 0
+        val windowEndHour = savedEndHour.toIntOrNull() ?: 24
+        val dailyPromptTarget = savedPromptsPerDay.toIntOrNull() ?: 0
+        while (true) {
+            val now = LocalDateTime.now()
+            val windowStart = currentWindowStart(now, windowStartHour, windowEndHour).toEpochMillis()
+            if (windowStart != windowStartEpoch) {
+                windowStartEpoch = windowStart
+                deliveredInWindow = 0
                 onPromptDeliveryTracked(deliveredInWindow, windowStartEpoch)
             }
+            val delayMs = nextPromptDelayMillis(
+                now,
+                windowStartHour,
+                windowEndHour,
+                dailyPromptTarget,
+                deliveredInWindow
+            )
+            if (delayMs == null) {
+                delay(5 * 60_000L)
+                continue
+            }
+            delay(delayMs)
+            val nextTask = chooseWeightedTask(
+                tasks = promptTasks,
+                declineCounts = savedDeclineCounts,
+                previousTaskId = taskQueue.lastOrNull { it.isActionable() }?.task?.id
+            )
+            receiveQueuedTask(nextTask)
+            deliveredInWindow++
+            onPromptDeliveryTracked(deliveredInWindow, windowStartEpoch)
         }
     }
 
@@ -391,7 +373,6 @@ fun MicroTaskingApp(
             initialStartHour = savedStartHour,
             initialEndHour = savedEndHour,
             initialPromptsPerDay = savedPromptsPerDay,
-            initialRapidTestMode = savedRapidTestMode,
             initialMaxQueueSize = savedMaxQueueSize,
             initialSheetUrl = savedSheetUrl,
             isImportingSheet = isImportingSheet,
@@ -401,21 +382,21 @@ fun MicroTaskingApp(
             onOpenQrScanner = { showingQrScanner = true },
             onSyncSheet = { url -> runSheetImport(url) },
             onCancel = { if (setupComplete) showingSettings = false },
-            onSave = { categories, start, end, prompts, rapidMode, queueSize, sheetUrl ->
+            onSave = { categories, start, end, prompts, queueSize, sheetUrl ->
                 savedCategories = categories
                 savedStartHour = start
                 savedEndHour = end
                 savedPromptsPerDay = prompts
-                savedRapidTestMode = rapidMode
                 savedMaxQueueSize = queueSize
                 savedSheetUrl = sheetUrl
-                onSettingsSaved(categories, start, end, prompts, rapidMode, queueSize, sheetUrl)
+                onSettingsSaved(categories, start, end, prompts, queueSize, sheetUrl)
                 showingSettings = false
             }
         )
     } else if (showingScore || shouldShowScoreInsteadOfTasks) {
         ScoreScreen(
-            completedCount = completedCount,
+            totalCompletedCount = totalCompletedCount,
+            streak = streak,
             attemptedCount = attemptedCount,
             taskCompleted = lastTaskCompleted,
             hasQueuedTasks = visibleTaskEntries.isNotEmpty(),
@@ -432,8 +413,7 @@ fun MicroTaskingApp(
     } else {
         TaskPromptScreen(
             taskEntries = visibleTaskEntries,
-            completedCount = completedCount,
-            rapidTestMode = savedRapidTestMode && backgroundPromptsRunning,
+            streak = streak,
             onOpenSettings = { showingSettings = true },
             onStart = { taskId ->
                 taskQueue = taskQueue.map {
@@ -441,9 +421,10 @@ fun MicroTaskingApp(
                 }
             },
             onComplete = { taskId ->
-                completedCount++
+                totalCompletedCount++
                 attemptedCount++
                 lastTaskCompleted = true
+                streak++
                 taskQueue = taskQueue.map {
                     if (it.task.id == taskId) it.complete() else it
                 }
@@ -452,6 +433,7 @@ fun MicroTaskingApp(
             onAbandon = { taskId ->
                 attemptedCount++
                 lastTaskCompleted = false
+                streak = 0
                 taskQueue = taskQueue.map {
                     if (it.task.id == taskId) it.abandon() else it
                 }
@@ -473,6 +455,7 @@ fun MicroTaskingApp(
                 onDeclineCountsSaved(savedDeclineCounts)
                 attemptedCount++
                 lastTaskCompleted = false
+                streak = 0
                 taskQueue = taskQueue.filter { it.task.id != taskId }
                 showingScore = true
             },
@@ -488,8 +471,7 @@ fun MicroTaskingApp(
 @Composable
 fun TaskPromptScreen(
     taskEntries: List<TaskStackEntry>,
-    completedCount: Int,
-    rapidTestMode: Boolean,
+    streak: Int,
     onOpenSettings: () -> Unit,
     onStart: (String) -> Unit,
     onComplete: (String) -> Unit,
@@ -516,13 +498,6 @@ fun TaskPromptScreen(
         ) {
             item {
                 Text("Task queue: ${taskEntries.size} active", style = MaterialTheme.typography.labelLarge)
-                if (rapidTestMode) {
-                    Text(
-                        text = "Rapid test mode is active",
-                        modifier = Modifier.padding(top = 4.dp),
-                        color = MaterialTheme.colorScheme.error
-                    )
-                }
             }
 
             items(taskEntries, key = { it.task.id }) { entry ->
@@ -565,7 +540,7 @@ fun TaskPromptScreen(
 
             item {
                 Text(
-                    text = "Completed this session: $completedCount",
+                    text = "Streak: $streak",
                     modifier = Modifier.padding(top = 8.dp),
                     style = MaterialTheme.typography.bodyLarge
                 )
@@ -577,7 +552,8 @@ fun TaskPromptScreen(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ScoreScreen(
-    completedCount: Int,
+    totalCompletedCount: Int,
+    streak: Int,
     attemptedCount: Int,
     taskCompleted: Boolean,
     hasQueuedTasks: Boolean,
@@ -586,7 +562,7 @@ fun ScoreScreen(
     onBackgroundPromptsChanged: (Boolean) -> Unit,
     onReturnToTaskList: () -> Unit
 ) {
-    val scorePercent = if (attemptedCount == 0) 0 else completedCount * 100 / attemptedCount
+    val scorePercent = if (attemptedCount == 0) 0 else totalCompletedCount * 100 / attemptedCount
     val scoreColor = when {
         scorePercent >= 80 -> Color(0xFF2E7D32)
         scorePercent >= 50 -> Color(0xFF8A6000)
@@ -629,7 +605,7 @@ fun ScoreScreen(
             Text("This month: $scorePercent%", color = scoreColor)
             Text("All time: $scorePercent%", color = scoreColor)
             Text(
-                text = "Completed this session: $completedCount",
+                text = "Streak: $streak",
                 modifier = Modifier.padding(top = 20.dp),
                 style = MaterialTheme.typography.bodyLarge
             )
@@ -667,7 +643,6 @@ fun SettingsScreen(
     initialStartHour: String,
     initialEndHour: String,
     initialPromptsPerDay: String,
-    initialRapidTestMode: Boolean,
     initialMaxQueueSize: Int,
     initialSheetUrl: String = "",
     isImportingSheet: Boolean = false,
@@ -677,20 +652,19 @@ fun SettingsScreen(
     onOpenQrScanner: () -> Unit,
     onSyncSheet: (String) -> Unit,
     onCancel: () -> Unit,
-    onSave: (Set<String>, String, String, String, Boolean, Int, String) -> Unit
+    onSave: (Set<String>, String, String, String, Int, String) -> Unit
 ) {
     var selectedCategories by remember { mutableStateOf(initialCategories) }
     var startHour by remember { mutableStateOf(initialStartHour) }
     var endHour by remember { mutableStateOf(initialEndHour) }
     var promptsPerDay by remember { mutableStateOf(initialPromptsPerDay) }
-    var rapidTestMode by remember { mutableStateOf(initialRapidTestMode) }
     var maxQueueSize by remember { mutableStateOf(initialMaxQueueSize.toString()) }
     var sheetUrl by remember { mutableStateOf(initialSheetUrl) }
     var categoriesExpanded by remember { mutableStateOf(true) }
     var scheduleExpanded by remember { mutableStateOf(true) }
     var externalPoolExpanded by remember { mutableStateOf(true) }
     var localTasksExpanded by remember { mutableStateOf(true) }
-    var testingExpanded by remember { mutableStateOf(false) }
+    var aboutExpanded by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
 
     @Composable
@@ -894,37 +868,19 @@ fun SettingsScreen(
             item {
                 OutlinedCard(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        sectionHeader("About & Testing", testingExpanded) {
-                            testingExpanded = !testingExpanded
+                        sectionHeader("About", aboutExpanded) {
+                            aboutExpanded = !aboutExpanded
                         }
-                        if (testingExpanded) {
+                        if (aboutExpanded) {
                             Text(
                                 "v${BuildConfig.VERSION_BASE}-${BuildConfig.BUILD_NUMBER}",
                                 style = MaterialTheme.typography.bodyLarge
                             )
                             Text(
-                                "Built ${BuildConfig.BUILD_TIMESTAMP} UTC \u2022 ${BuildConfig.GIT_SHORT_SHA}",
+                                "${BuildConfig.BUILD_TIMESTAMP} - ${BuildConfig.GIT_SHORT_SHA} - ${BuildConfig.GIT_BRANCH}",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text("Rapid test mode", style = MaterialTheme.typography.bodyLarge)
-                                    Text(
-                                        "Show test prompts every 15 seconds for fast testing.",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                                Checkbox(
-                                    checked = rapidTestMode,
-                                    onCheckedChange = { rapidTestMode = it }
-                                )
-                            }
                         }
                     }
                 }
@@ -950,7 +906,6 @@ fun SettingsScreen(
                             (startHour.toIntOrNull() ?: 0).coerceIn(0, 24).toString(),
                             (endHour.toIntOrNull() ?: 24).coerceIn(0, 24).toString(),
                             (promptsPerDay.toIntOrNull() ?: 0).coerceAtLeast(0).toString(),
-                            rapidTestMode,
                             maxQueueSize.toIntOrNull()?.coerceAtLeast(1) ?: 3,
                             sheetUrl
                         )
