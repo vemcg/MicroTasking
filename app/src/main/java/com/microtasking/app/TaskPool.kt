@@ -121,22 +121,37 @@ fun writeManagedTasks(tasks: List<ManagedTask>): String = JSONArray().apply {
     }
 }.toString()
 
+/**
+ * Picks a category weighted by its position in [activeCategoryOrder] (first category is twice as
+ * likely as the last, linear in between), then picks uniformly at random among that category's
+ * tasks in [tasks].
+ */
 fun chooseWeightedTask(
     tasks: List<ManagedTask>,
-    declineCounts: Map<String, Int>,
+    activeCategoryOrder: List<String>,
     previousTaskId: String?
 ): ManagedTask {
-    val nonRepeatedTasks = tasks.filter { it.id != previousTaskId }.ifEmpty { tasks }
-    val weightedTasks = nonRepeatedTasks.map { task ->
-        task to (1.0 / (1 + (declineCounts[task.id] ?: 0)))
+    val tasksByCategory = tasks.groupBy { it.category }
+    val orderedCategories = activeCategoryOrder.filter { tasksByCategory.containsKey(it) }
+        .ifEmpty { tasksByCategory.keys.toList() }
+    val categoryCount = orderedCategories.size
+    val weightedCategories = orderedCategories.mapIndexed { index, category ->
+        val weight = if (categoryCount <= 1) 1.0 else 2.0 - (index.toDouble() / (categoryCount - 1))
+        category to weight
     }
-    val target = Random.nextDouble() * weightedTasks.sumOf { it.second }
+    val target = Random.nextDouble() * weightedCategories.sumOf { it.second }
     var cumulativeWeight = 0.0
-    for ((task, weight) in weightedTasks) {
+    var chosenCategory = weightedCategories.last().first
+    for ((category, weight) in weightedCategories) {
         cumulativeWeight += weight
-        if (cumulativeWeight >= target) return task
+        if (cumulativeWeight >= target) {
+            chosenCategory = category
+            break
+        }
     }
-    return weightedTasks.last().first
+    val categoryTasks = tasksByCategory.getValue(chosenCategory)
+    val candidates = categoryTasks.filter { it.id != previousTaskId }.ifEmpty { categoryTasks }
+    return candidates.random()
 }
 
 fun readDeclineCounts(json: String): Map<String, Int> = runCatching {

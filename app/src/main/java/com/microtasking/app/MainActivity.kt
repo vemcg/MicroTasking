@@ -246,6 +246,7 @@ fun MicroTaskingApp(
     val coroutineScope = rememberCoroutineScope()
     val availableCategories = (savedManagedTasks.map { it.category } + savedUserTasks.map { it.category })
         .distinct()
+    val activeCategoryOrder = availableCategories.filter { it in savedCategories }
     val promptTasks = eligiblePromptTasks(savedManagedTasks, savedUserTasks, savedCategories)
     var taskQueue by remember(promptTasks, savedMaxQueueSize) {
         mutableStateOf(makeTaskStack(promptTasks, maxEntries = savedMaxQueueSize))
@@ -327,7 +328,7 @@ fun MicroTaskingApp(
             delay(delayMs)
             val nextTask = chooseWeightedTask(
                 tasks = promptTasks,
-                declineCounts = savedDeclineCounts,
+                activeCategoryOrder = activeCategoryOrder,
                 previousTaskId = taskQueue.lastOrNull { it.isActionable() }?.task?.id
             )
             receiveQueuedTask(nextTask)
