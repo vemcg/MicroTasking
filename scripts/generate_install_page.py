@@ -38,18 +38,19 @@ def make_qr_with_logo(url: str, version_label: str, out_path: pathlib.Path) -> N
     draw = ImageDraw.Draw(img)
 
     width, height = img.size
-    label = version_label if version_label.startswith("v") else f"v{version_label}"
+    label = version_label.lstrip("v")
 
-    # Landscape pill in the center: small nested-square mark on the left, version text on
-    # the right. Kept well under the ~30% damage budget of error-correction level H.
-    box_w, box_h = int(width * 0.46), int(height * 0.16)
-    left, top = (width - box_w) // 2, (height - box_h) // 2
-    right, bottom = left + box_w, top + box_h
-    draw.rounded_rectangle([left, top, right, bottom], radius=box_h // 4, fill="white", outline="#cbd5e1", width=2)
+    # Square carve-out: mark on top, version number below it. Kept well under the ~30%
+    # damage budget of error-correction level H.
+    box_side = int(min(width, height) * 0.30)
+    left, top = (width - box_side) // 2, (height - box_side) // 2
+    right, bottom = left + box_side, top + box_side
+    draw.rounded_rectangle([left, top, right, bottom], radius=box_side // 8, fill="white", outline="#cbd5e1", width=2)
 
-    mark_pad = int(box_h * 0.14)
-    mark_size = box_h - 2 * mark_pad
-    mark_left, mark_top = left + mark_pad, top + mark_pad
+    pad = int(box_side * 0.10)
+    mark_size = int(box_side * 0.44)
+    mark_left = left + (box_side - mark_size) // 2
+    mark_top = top + pad
     mark_right, mark_bottom = mark_left + mark_size, mark_top + mark_size
     draw.rectangle([mark_left, mark_top, mark_right, mark_bottom], outline=_LOGO_OUTER, width=max(1, mark_size // 16))
     inset = max(2, mark_size // 6)
@@ -64,12 +65,19 @@ def make_qr_with_logo(url: str, version_label: str, out_path: pathlib.Path) -> N
     cx2, cy2 = mark_left + mark_size * 0.74, mark_top + mark_size * 0.32
     draw.line([cx0, cy0, cx1, cy1, cx2, cy2], fill=_LOGO_CHECK, width=check_w, joint="curve")
 
-    font = _load_font(max(10, int(box_h * 0.42)))
-    text_area_left = mark_right + mark_pad
-    text_bbox = draw.textbbox((0, 0), label, font=font)
-    text_w, text_h = text_bbox[2] - text_bbox[0], text_bbox[3] - text_bbox[1]
-    text_x = text_area_left + max(0, ((right - mark_pad) - text_area_left - text_w) // 2)
-    text_y = top + (box_h - text_h) // 2 - text_bbox[1]
+    # Shrink the font until the label fits inside the box with margin on both sides.
+    max_text_width = box_side - 2 * pad
+    font_size = max(10, int(box_side * 0.16))
+    while font_size > 8:
+        font = _load_font(font_size)
+        text_bbox = draw.textbbox((0, 0), label, font=font)
+        text_w = text_bbox[2] - text_bbox[0]
+        if text_w <= max_text_width:
+            break
+        font_size -= 1
+    text_h = text_bbox[3] - text_bbox[1]
+    text_x = left + (box_side - text_w) // 2 - text_bbox[0]
+    text_y = mark_bottom + pad - text_bbox[1]
     draw.text((text_x, text_y), label, fill=_LOGO_CHECK, font=font)
 
     img.save(out_path)
