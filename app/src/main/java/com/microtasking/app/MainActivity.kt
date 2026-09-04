@@ -52,7 +52,6 @@ import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -251,11 +250,7 @@ fun MicroTaskingApp(
     var taskQueue by remember(promptTasks, savedMaxQueueSize) {
         mutableStateOf(makeTaskStack(promptTasks, maxEntries = savedMaxQueueSize))
     }
-    val actionableTasks = taskQueue.filter { it.isActionable() }
-    val visibleTaskEntries = actionableTasks.ifEmpty {
-        emptyList()
-    }
-    val shouldShowScoreInsteadOfTasks = showingScore || visibleTaskEntries.isEmpty()
+    val visibleTaskEntries = taskQueue.filter { it.isActionable() }
 
     fun receiveQueuedTask(task: ManagedTask) {
         val activeTasks = taskQueue.filter { it.isActionable() }
@@ -294,13 +289,12 @@ fun MicroTaskingApp(
     }
 
     LaunchedEffect(
-        backgroundPromptsRunning,
         promptTasks,
         savedStartHour,
         savedEndHour,
         savedPromptsPerDay
     ) {
-        if (!backgroundPromptsRunning || promptTasks.isEmpty()) {
+        if (promptTasks.isEmpty()) {
             return@LaunchedEffect
         }
         val windowStartHour = savedStartHour.toIntOrNull() ?: 0
@@ -326,14 +320,18 @@ fun MicroTaskingApp(
                 continue
             }
             delay(delayMs)
-            val nextTask = chooseWeightedTask(
-                tasks = promptTasks,
-                activeCategoryOrder = activeCategoryOrder,
-                previousTaskId = taskQueue.lastOrNull { it.isActionable() }?.task?.id
-            )
-            receiveQueuedTask(nextTask)
+            // Consume this delivery slot even while paused, so resuming doesn't dump a backlog
+            // of everything that would have arrived during the pause.
             deliveredInWindow++
             onPromptDeliveryTracked(deliveredInWindow, windowStartEpoch)
+            if (backgroundPromptsRunning) {
+                val nextTask = chooseWeightedTask(
+                    tasks = promptTasks,
+                    activeCategoryOrder = activeCategoryOrder,
+                    previousTaskId = taskQueue.lastOrNull { it.isActionable() }?.task?.id
+                )
+                receiveQueuedTask(nextTask)
+            }
         }
     }
 
@@ -393,7 +391,7 @@ fun MicroTaskingApp(
                 showingSettings = false
             }
         )
-    } else if (showingScore || shouldShowScoreInsteadOfTasks) {
+    } else if (showingScore) {
         ScoreScreen(
             streak = streak,
             longestStreak = longestStreak,
@@ -484,7 +482,7 @@ fun TaskPromptScreen(
         TopAppBar(
             title = { Text("MicroTasking") },
             actions = {
-                TextButton(onClick = onOpenScore) { Text("Score") }
+                Button(onClick = onOpenScore) { Text("Score") }
                 IconButton(onClick = onOpenSettings) {
                     Icon(Icons.Filled.Settings, contentDescription = "Settings")
                 }
@@ -577,7 +575,7 @@ fun ScoreScreen(
         TopAppBar(
             title = { Text("MicroTasking") },
             actions = {
-                TextButton(onClick = onReturnToTaskList) { Text("Task List") }
+                Button(onClick = onReturnToTaskList) { Text("Task List") }
                 IconButton(onClick = onOpenSettings) {
                     Icon(Icons.Filled.Settings, contentDescription = "Settings")
                 }
