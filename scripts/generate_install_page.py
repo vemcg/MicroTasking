@@ -324,7 +324,7 @@ def main() -> None:
         <li>Paste your URL into the box below:</li>
       </ol>
       <div class="input-group">
-        <input type="url" id="sheetUrl" placeholder="https://docs.google.com/spreadsheets/d/your-sheet-id/edit..." oninput="generateSheetQr()">
+        <input type="url" id="sheetUrl" placeholder="https://docs.google.com/spreadsheets/d/your-sheet-id/edit..." oninput="generateSheetQr()" onfocus="this.select()">
       </div>
       <div class="qr-container" id="sheetQrContainer" style="display:none;">
         <p style="margin-bottom: 0.5rem; font-weight: 600; color: var(--accent);">Your Sheet QR Code:</p>
@@ -349,13 +349,16 @@ def main() -> None:
   </main>
 
   <script>
+    const SHEET_URL_STORAGE_KEY = 'microtaskingSheetUrl';
+
     function generateSheetQr() {{
       const input = document.getElementById('sheetUrl').value.trim();
       const container = document.getElementById('sheetQrContainer');
       const qrDiv = document.getElementById('sheetQr');
-      
+
       qrDiv.innerHTML = '';
       if (input.length > 10) {{
+        localStorage.setItem(SHEET_URL_STORAGE_KEY, input);
         container.style.display = 'block';
         new QRCode(qrDiv, {{
           text: input,
@@ -366,9 +369,18 @@ def main() -> None:
           correctLevel : QRCode.CorrectLevel.M
         }});
       }} else {{
+        localStorage.removeItem(SHEET_URL_STORAGE_KEY);
         container.style.display = 'none';
       }}
     }}
+
+    (function restoreSheetUrl() {{
+      const saved = localStorage.getItem(SHEET_URL_STORAGE_KEY);
+      if (saved) {{
+        document.getElementById('sheetUrl').value = saved;
+        generateSheetQr();
+      }}
+    }})();
   </script>
 </body>
 </html>
