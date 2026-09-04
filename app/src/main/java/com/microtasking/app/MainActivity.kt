@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.Settings
 import java.net.URL
 import java.net.URLDecoder
 import java.net.URLEncoder
+import java.time.LocalDateTime
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
@@ -112,6 +113,8 @@ class MainActivity : ComponentActivity() {
                         promptsPerDay = preferences.getString("prompts_per_day", "6") ?: "6",
                         rapidTestMode = preferences.getBoolean("rapid_test_mode", false),
                         maxQueueSize = preferences.getInt("max_task_queue_size", 3),
+                        promptsDeliveredInWindow = preferences.getInt("prompts_delivered_in_window", 0),
+                        promptsWindowStartEpoch = preferences.getLong("prompts_window_start_epoch", 0L),
                         externalSheetUrl = preferences.getString("external_sheet_url", "") ?: "",
                         managedTasks = readManagedTasks(
                             preferences.getString("managed_tasks", "[]") ?: "[]"
@@ -152,6 +155,12 @@ class MainActivity : ComponentActivity() {
                         onSheetUrlSaved = { sheetUrl ->
                             preferences.edit()
                                 .putString("external_sheet_url", sheetUrl)
+                                .apply()
+                        },
+                        onPromptDeliveryTracked = { deliveredCount, windowStartEpoch ->
+                            preferences.edit()
+                                .putInt("prompts_delivered_in_window", deliveredCount)
+                                .putLong("prompts_window_start_epoch", windowStartEpoch)
                                 .apply()
                         },
                         onBackgroundPromptsChanged = { enabled ->
@@ -201,6 +210,8 @@ fun MicroTaskingApp(
     promptsPerDay: String,
     rapidTestMode: Boolean,
     maxQueueSize: Int,
+    promptsDeliveredInWindow: Int,
+    promptsWindowStartEpoch: Long,
     externalSheetUrl: String,
     userTasks: List<UserTask>,
     managedTasks: List<ManagedTask>,
@@ -210,6 +221,7 @@ fun MicroTaskingApp(
     onManagedTasksSaved: (List<ManagedTask>) -> Unit,
     onDeclineCountsSaved: (Map<String, Int>) -> Unit,
     onSheetUrlSaved: (String) -> Unit,
+    onPromptDeliveryTracked: (Int, Long) -> Unit,
     onBackgroundPromptsChanged: (Boolean) -> Unit
 ) {
     var showingSettings by remember {
@@ -225,6 +237,8 @@ fun MicroTaskingApp(
     var savedPromptsPerDay by remember { mutableStateOf(promptsPerDay) }
     var savedRapidTestMode by remember { mutableStateOf(rapidTestMode) }
     var savedMaxQueueSize by remember { mutableIntStateOf(maxQueueSize) }
+    var deliveredInWindow by remember { mutableIntStateOf(promptsDeliveredInWindow) }
+    var windowStartEpoch by remember { mutableStateOf(promptsWindowStartEpoch) }
     var savedSheetUrl by remember { mutableStateOf(externalSheetUrl) }
     var savedUserTasks by remember { mutableStateOf(userTasks) }
     var savedManagedTasks by remember { mutableStateOf(managedTasks) }
@@ -284,18 +298,60 @@ fun MicroTaskingApp(
         }
     }
 
-    LaunchedEffect(savedRapidTestMode, backgroundPromptsRunning, promptTasks) {
-        if (!savedRapidTestMode || !backgroundPromptsRunning || promptTasks.isEmpty()) {
+    LaunchedEffect(
+        savedRapidTestMode,
+        backgroundPromptsRunning,
+        promptTasks,
+        savedStartHour,
+        savedEndHour,
+        savedPromptsPerDay
+    ) {
+        if (!backgroundPromptsRunning || promptTasks.isEmpty()) {
             return@LaunchedEffect
         }
-        while (true) {
-            delay(15_000)
-            val nextTask = chooseWeightedTask(
-                tasks = promptTasks,
-                declineCounts = savedDeclineCounts,
-                previousTaskId = taskQueue.lastOrNull { it.isActionable() }?.task?.id
-            )
-            receiveQueuedTask(nextTask)
+        if (savedRapidTestMode) {
+            while (true) {
+                delay(15_000)
+                val nextTask = chooseWeightedTask(
+                    tasks = promptTasks,
+                    declineCounts = savedDeclineCounts,
+                    previousTaskId = taskQueue.lastOrNull { it.isActionable() }?.task?.id
+                )
+                receiveQueuedTask(nextTask)
+            }
+        } else {
+            val windowStartHour = savedStartHour.toIntOrNull() ?: 0
+            val windowEndHour = savedEndHour.toIntOrNull() ?: 24
+            val dailyPromptTarget = savedPromptsPerDay.toIntOrNull() ?: 0
+            while (true) {
+                val now = LocalDateTime.now()
+                val windowStart = currentWindowStart(now, windowStartHour, windowEndHour).toEpochMillis()
+                if (windowStart != windowStartEpoch) {
+                    windowStartEpoch = windowStart
+                    deliveredInWindow = 0
+                    onPromptDeliveryTracked(deliveredInWindow, windowStartEpoch)
+                }
+                val delayMs = nextPromptDelayMillis(
+                    now,
+                    windowStartHour,
+                    windowEndHour,
+                    dailyPromptTarget,
+                    deliveredInWindow
+                )
+                if (delayMs == null) {
+                    delay(5 * 60_000L)
+                    continue
+                }
+                delay(delayMs)
+                val nextTask = chooseWeightedTask(
+                    tasks = promptTasks,
+                    declineCounts = savedDeclineCounts,
+                    previousTaskId = taskQueue.lastOrNull { it.isActionable() }?.task?.id
+                )
+                receiveQueuedTask(nextTask)
+                deliveredInWindow++
+                onPromptDeliveryTracked(deliveredInWindow, windowStartEpoch)
+            }
         }
     }
 

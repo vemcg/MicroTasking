@@ -29,6 +29,7 @@ Next work session: make onboarding, import, persistence, versioning, and update 
    - Add automated checks where practical and document the manual device checklist.
 
 5. **Tasking logic**
-   - Remove the rapid-test capability. Prompts per day has no fixed upper limit (0 or more; the logic enforces it, not a hardcoded max like 6 or 300), and new tasks are added one at a time every couple of minutes instead of generating the full pool at once.
+   - Done (foreground only): prompts per day, active window, and remaining window time now drive real pacing — tasks are added to the queue one at a time at semi-random intervals computed from those settings, recalculated whenever settings are saved. See `TaskScheduling.kt`.
+   - Remaining: remove the rapid-test capability entirely (still present as a toggle), and make the same pacing drive background delivery (`PromptScheduler`/`PromptAlarmReceiver` still use a fixed 15-minute beat, not the window/quota logic).
    - Replace the "tasks completed this session" count with a streak: consecutive tasks completed successfully, not abandoned or timed out.
-   - Active window is start hour to end hour, both 0-24. At the end of the window, time out anything still sitting in the queue and reset the streak to 0 if anything was timed out. Start hour 0 and end hour 24 together mean the window never ends, so nothing is ever timed out.
+   - At the end of the active window, time out anything still sitting in the queue and reset the streak to 0 if anything was timed out. Start hour 0 and end hour 24 (or any start hour equal to end hour) mean the window never ends, so nothing is ever timed out.
