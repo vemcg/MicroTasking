@@ -27,20 +27,30 @@ jobs:
       - name: Determine timestamped version/tag
         id: version
         run: |
-          BUILD_TIMESTAMP=$(date -u +%Y%m%d%H%M%S)
-          BUILD_DATE=${BUILD_TIMESTAMP:0:8}
-          BUILD_TIME=${BUILD_TIMESTAMP:8:6}
+          BUILD_TIMESTAMP=$(date -u +%Y%m%d.%H%M%S)
           SHORT_SHA=$(git rev-parse --short=7 "$GITHUB_SHA")
-          VERSION_NAME="0.1.7-${{ github.run_number }}-${BUILD_DATE}.${BUILD_TIME}-${SHORT_SHA}"
+          VERSION_BASE="0.1.7"
+          BUILD_NUMBER="${{ github.run_number }}"
+          VERSION_NAME="${VERSION_BASE}-${BUILD_NUMBER}"
           VERSION_CODE=$(date -u +%s)
           TAG="v${VERSION_NAME}"
+          echo "version_base=$VERSION_BASE" >> "$GITHUB_OUTPUT"
+          echo "build_number=$BUILD_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "build_timestamp=$BUILD_TIMESTAMP" >> "$GITHUB_OUTPUT"
+          echo "git_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
           echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
           echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "asset_name=MicroTasking-$TAG.apk" >> "$GITHUB_OUTPUT"
 
       - name: Build debug APK
-        run: ./gradlew assembleDebug -PbuildVersionName="${{ steps.version.outputs.version_name }}" -PbuildVersionCode="${{ steps.version.outputs.version_code }}"
+        run: |
+          ./gradlew assembleDebug \
+            -PbuildVersionBase="${{ steps.version.outputs.version_base }}" \
+            -PbuildNumber="${{ steps.version.outputs.build_number }}" \
+            -PbuildTimestamp="${{ steps.version.outputs.build_timestamp }}" \
+            -PbuildGitSha="${{ steps.version.outputs.git_sha }}" \
+            -PbuildVersionCode="${{ steps.version.outputs.version_code }}"
 
       - name: Stage APK
         run: |

@@ -9,9 +9,34 @@ plugins {
 
 val buildInstant = Instant.now()
 val defaultVersionCode = buildInstant.epochSecond.toInt()
-val defaultVersionName = "0.1.7-0-" + DateTimeFormatter.ofPattern("yyyyMMdd.HHmmss")
-    .withZone(ZoneOffset.UTC)
-    .format(buildInstant)
+
+// Base app version. Bump manually for meaningful releases.
+val versionBase = providers.gradleProperty("buildVersionBase").orElse("0.1.7").get()
+// Unpadded build/run number (e.g. CI run number). Kept numeric so "10" never sorts
+// before "2" the way it would under plain lexical string comparison.
+val buildNumber = providers.gradleProperty("buildNumber").orElse("0").get()
+val buildTimestamp = providers.gradleProperty("buildTimestamp").orElse(
+    DateTimeFormatter.ofPattern("yyyyMMdd.HHmmss").withZone(ZoneOffset.UTC).format(buildInstant)
+).get()
+fun currentGitShortSha(): String = try {
+    val process = ProcessBuilder("git", "rev-parse", "--short=7", "HEAD")
+        .directory(rootDir)
+        .redirectErrorStream(true)
+        .start()
+    val output = process.inputStream.bufferedReader().readText().trim()
+    process.waitFor()
+    output.ifBlank { "unknown" }
+} catch (e: Exception) {
+    "unknown"
+}
+
+val gitShortSha = providers.gradleProperty("buildGitSha").orElse(currentGitShortSha()).get()
+
+// Short, human-facing version: base + unpadded build number only (e.g. "0.1.7-11").
+// Full provenance (timestamp, commit) is exposed separately via BuildConfig for display
+// in Settings, rather than being embedded in versionName.
+val shortVersionName = "$versionBase-$buildNumber"
+val fullVersionLabel = "v$shortVersionName-$buildTimestamp-$gitShortSha"
 
 android {
     namespace = "com.microtasking.app"
@@ -21,8 +46,16 @@ android {
         applicationId = "com.microtasking.app"
         minSdk = 26
         targetSdk = 34
+        // Must stay a single monotonically increasing integer (Android requirement for
+        // update-safety) - never derived from lexical comparison of the display string.
         versionCode = providers.gradleProperty("buildVersionCode").map(String::toInt).orElse(defaultVersionCode).get()
-        versionName = providers.gradleProperty("buildVersionName").orElse(defaultVersionName).get()
+        versionName = providers.gradleProperty("buildVersionName").orElse(shortVersionName).get()
+
+        buildConfigField("String", "VERSION_BASE", "\"$versionBase\"")
+        buildConfigField("int", "BUILD_NUMBER", buildNumber)
+        buildConfigField("String", "BUILD_TIMESTAMP", "\"$buildTimestamp\"")
+        buildConfigField("String", "GIT_SHORT_SHA", "\"$gitShortSha\"")
+        buildConfigField("String", "FULL_VERSION_LABEL", "\"$fullVersionLabel\"")
     }
 
     signingConfigs {
@@ -53,6 +86,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     composeOptions {

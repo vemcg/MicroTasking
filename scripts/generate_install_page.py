@@ -4,6 +4,75 @@ import argparse
 import pathlib
 
 import qrcode
+from qrcode.constants import ERROR_CORRECT_H
+from PIL import Image, ImageDraw, ImageFont
+
+# App icon colors, matching app/src/main/res/drawable/ic_launcher_foreground.xml.
+_LOGO_OUTER = "#81C784"
+_LOGO_INNER = "#43A047"
+_LOGO_CHECK = "#2E7D32"
+
+
+def _load_font(size: int) -> ImageFont.FreeTypeFont:
+    for candidate in (
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "C:/Windows/Fonts/segoeuib.ttf",
+    ):
+        try:
+            return ImageFont.truetype(candidate, size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
+def make_qr_with_logo(url: str, version_label: str, out_path: pathlib.Path) -> None:
+    """Renders a QR code with a center carve-out holding the app mark + short version.
+
+    Uses error-correction level H (tolerates ~30% damage) and keeps the carve-out to a
+    small fraction of the total area so the code stays reliably scannable.
+    """
+    qr = qrcode.QRCode(error_correction=ERROR_CORRECT_H, box_size=10, border=4)
+    qr.add_data(url)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
+    draw = ImageDraw.Draw(img)
+
+    width, height = img.size
+    label = version_label if version_label.startswith("v") else f"v{version_label}"
+
+    # Landscape pill in the center: small nested-square mark on the left, version text on
+    # the right. Kept well under the ~30% damage budget of error-correction level H.
+    box_w, box_h = int(width * 0.46), int(height * 0.16)
+    left, top = (width - box_w) // 2, (height - box_h) // 2
+    right, bottom = left + box_w, top + box_h
+    draw.rounded_rectangle([left, top, right, bottom], radius=box_h // 4, fill="white", outline="#cbd5e1", width=2)
+
+    mark_pad = int(box_h * 0.14)
+    mark_size = box_h - 2 * mark_pad
+    mark_left, mark_top = left + mark_pad, top + mark_pad
+    mark_right, mark_bottom = mark_left + mark_size, mark_top + mark_size
+    draw.rectangle([mark_left, mark_top, mark_right, mark_bottom], outline=_LOGO_OUTER, width=max(1, mark_size // 16))
+    inset = max(2, mark_size // 6)
+    draw.rectangle(
+        [mark_left + inset, mark_top + inset, mark_right - inset, mark_bottom - inset],
+        outline=_LOGO_INNER,
+        width=max(1, mark_size // 14),
+    )
+    check_w = max(2, mark_size // 10)
+    cx0, cy0 = mark_left + mark_size * 0.28, mark_top + mark_size * 0.52
+    cx1, cy1 = mark_left + mark_size * 0.44, mark_top + mark_size * 0.70
+    cx2, cy2 = mark_left + mark_size * 0.74, mark_top + mark_size * 0.32
+    draw.line([cx0, cy0, cx1, cy1, cx2, cy2], fill=_LOGO_CHECK, width=check_w, joint="curve")
+
+    font = _load_font(max(10, int(box_h * 0.42)))
+    text_area_left = mark_right + mark_pad
+    text_bbox = draw.textbbox((0, 0), label, font=font)
+    text_w, text_h = text_bbox[2] - text_bbox[0], text_bbox[3] - text_bbox[1]
+    text_x = text_area_left + max(0, ((right - mark_pad) - text_area_left - text_w) // 2)
+    text_y = top + (box_h - text_h) // 2 - text_bbox[1]
+    draw.text((text_x, text_y), label, fill=_LOGO_CHECK, font=font)
+
+    img.save(out_path)
 
 
 def main() -> None:
@@ -21,7 +90,11 @@ def main() -> None:
     out_dir = pathlib.Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    qrcode.make(args.url).save(out_dir / "qr.png")
+    # Normalize to a single leading "v" regardless of whether --version already has one.
+    display_version = args.version if args.version.startswith("v") else f"v{args.version}"
+
+    make_qr_with_logo(args.url, display_version, out_dir / "qr.png")
+
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -211,7 +284,7 @@ def main() -> None:
           <div class="qr-container">
             <img src="qr.png" alt="MicroTasking APK QR Code">
             <br>
-            <a href="{args.url}" class="btn" target="_blank" rel="noopener">Download APK (v{args.version})</a>
+            <a href="{args.url}" class="btn" target="_blank" rel="noopener">Download MicroTasking APK ({display_version})</a>
             <br>
             <a href="{args.url}" target="_blank" rel="noopener">Open the download again</a>
           </div>

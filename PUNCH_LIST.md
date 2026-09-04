@@ -32,11 +32,18 @@ Next work session: make onboarding, import, persistence, versioning, and update 
    - Document exactly what Synchronize does on later uses.
    - Define replacement/merge behavior, task identity, changed descriptions, deleted rows, categories, enabled checkboxes, and offline/error behavior.
 
-6. **Redefine versioning**
-   - Use a human-readable version such as `v0.1.7-11-20260903.035946-c0b69a1`.
-   - Components: base app version, unpadded build/run number, UTC `yyyymmdd.HHmmss`, and short Git commit hash.
-   - Android numeric `versionCode` must be monotonically increasing and update-safe.
-   - Define how to compare versions as components rather than relying on lexical comparison of the entire string.
+6. **Redefine versioning** — DONE (2026-09-03)
+   - Human-facing version shown in the app is short: `v0.1.7-11` (base app version + unpadded
+     build/run number). Full provenance (`yyyymmdd.HHmmss` UTC build timestamp + short Git
+     commit hash) is generated at build time but only surfaced in Settings > About & Testing,
+     not embedded in the main version string.
+   - `versionCode` stays a single monotonically increasing integer (UTC epoch seconds at build
+     time), independent of the display string, so Android's update check is always numeric.
+   - Added `VersionInfo.kt`: parses "major.minor.patch-buildNumber" and compares component by
+     component (numeric build-number compare), so "10" never sorts below "2" the way it would
+     under lexical string comparison.
+   - CI (`release-apk.yml`) now passes `buildVersionBase`/`buildNumber`/`buildTimestamp`/
+     `buildGitSha` to Gradle; release tags are the short `v0.1.7-<run_number>` form.
 
 7. **Bulletproof onboarding, install, and update**
    - Test the complete path from onboarding page to APK download to installation/update.

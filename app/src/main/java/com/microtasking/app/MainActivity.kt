@@ -768,10 +768,19 @@ fun SettingsScreen(
             item {
                 OutlinedCard(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        sectionHeader("Testing & Development", testingExpanded) {
+                        sectionHeader("About & Testing", testingExpanded) {
                             testingExpanded = !testingExpanded
                         }
                         if (testingExpanded) {
+                            Text(
+                                "v${BuildConfig.VERSION_BASE}-${BuildConfig.BUILD_NUMBER}",
+                                style = MaterialTheme.typography.bodyLarge
+                            )
+                            Text(
+                                "Built ${BuildConfig.BUILD_TIMESTAMP} UTC \u2022 ${BuildConfig.GIT_SHORT_SHA}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically,
