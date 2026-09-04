@@ -575,7 +575,7 @@ fun ScoreScreen(
     onReturnToTaskList: () -> Unit
 ) {
     LaunchedEffect(entryToken) {
-        delay(5_000)
+        delay(3_000)
         onReturnToTaskList()
     }
     Column(modifier = Modifier.fillMaxSize()) {
