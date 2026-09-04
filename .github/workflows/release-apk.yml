@@ -82,8 +82,11 @@ jobs:
         run: |
           MAIN_TAG=""
           if [ "${{ steps.version.outputs.git_branch }}" != "main" ]; then
-            MAIN_TAG=$(gh release list --limit 50 --json tagName,createdAt \
-              | jq -r '[.[] | select(.tagName | test("^v[0-9]+\\.[0-9]+\\.[0-9]+-[0-9]+$"))] | sort_by(.createdAt) | last | .tagName // empty')
+            # publishedAt, not createdAt: createdAt tracks the tagged commit's date, which
+            # several releases built from the same commit window share - it can't tell them
+            # apart. publishedAt is the actual release-publish moment, always distinct.
+            MAIN_TAG=$(gh release list --limit 50 --json tagName,publishedAt \
+              | jq -r '[.[] | select(.tagName | test("^v[0-9]+\\.[0-9]+\\.[0-9]+-[0-9]+$"))] | sort_by(.publishedAt) | last | .tagName // empty')
           fi
           echo "main_tag=$MAIN_TAG" >> "$GITHUB_OUTPUT"
           if [ -n "$MAIN_TAG" ]; then
