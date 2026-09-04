@@ -27,6 +27,7 @@ Next work session: make onboarding, import, persistence, versioning, and update 
    - Make failures visible with actionable messages and retry paths.
    - Validate APK URL, release asset existence, signing certificate, version code, and generated QR payload.
    - Add automated checks where practical and document the manual device checklist.
+   - Done: the install page shows two side-by-side QR codes when built from a non-main branch — one for the latest main release, one for that branch's just-built release — and just the single main QR on ordinary main builds. Non-main release tags now get the branch name appended (e.g. `v0.1.7-30-tasking-logic`) so "find the latest main release" can tell them apart by tag pattern alone; see the "Find latest main release" step in `release-apk.yml` and `--branch`/`--main-url`/`--main-version` in `scripts/generate_install_page.py`.
 
 5. **Tasking logic**
    - Done (foreground only): prompts per day, active window, and remaining window time now drive real pacing — tasks are added to the queue one at a time at semi-random intervals computed from those settings, recalculated whenever settings are saved. See `TaskScheduling.kt`.

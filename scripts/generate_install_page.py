@@ -87,6 +87,9 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", required=True, help="Direct APK download URL")
     parser.add_argument("--version", required=True, help="Release tag/version label")
+    parser.add_argument("--branch", default="main", help="Branch this build was made from")
+    parser.add_argument("--main-url", default="", help="Direct APK download URL for the latest main release")
+    parser.add_argument("--main-version", default="", help="Release tag/version label for the latest main release")
     parser.add_argument(
         "--template-url",
         default="https://docs.google.com/spreadsheets/d/1Ss15J7afOl3HON6h2dI8f8hGi8JYjH0hRywuV0nCYOg/edit?usp=sharing",
@@ -98,10 +101,38 @@ def main() -> None:
     out_dir = pathlib.Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Normalize to a single leading "v" regardless of whether --version already has one.
-    display_version = args.version if args.version.startswith("v") else f"v{args.version}"
+    def normalize(version: str) -> str:
+        return version if version.startswith("v") else f"v{version}"
+
+    display_version = normalize(args.version)
 
     make_qr_with_logo(args.url, display_version, out_dir / "qr.png")
+
+    # Only show a second, side-by-side QR code when this build is off a non-main branch and
+    # we actually found a prior main release to point at - main builds still get a single QR.
+    show_main_qr = bool(args.main_url) and args.branch != "main"
+    main_display_version = normalize(args.main_version) if args.main_version else ""
+    if show_main_qr:
+        make_qr_with_logo(args.main_url, main_display_version, out_dir / "qr-main.png")
+
+    def qr_block(url: str, version: str, img_name: str, label: str = "") -> str:
+        label_html = f'<div class="qr-label">{label}</div>' if label else ""
+        return f"""<div class="qr-container">
+            {label_html}
+            <img src="{img_name}" alt="MicroTasking APK QR Code ({version})">
+            <br>
+            <a href="{url}" class="btn" target="_blank" rel="noopener">Download MicroTasking APK ({version})</a>
+            <br>
+            <a href="{url}" target="_blank" rel="noopener">Open the download again</a>
+          </div>"""
+
+    if show_main_qr:
+        qr_section_html = f"""<div class="qr-row">
+            {qr_block(args.main_url, main_display_version, "qr-main.png", "Main branch")}
+            {qr_block(args.url, display_version, "qr.png", f"Active branch ({args.branch})")}
+          </div>"""
+    else:
+        qr_section_html = qr_block(args.url, display_version, "qr.png")
 
 
     html = f"""<!DOCTYPE html>
@@ -226,6 +257,21 @@ def main() -> None:
     max-width: 220px;
     height: auto;
   }}
+  .qr-row {{
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 1.5rem;
+  }}
+  .qr-row .qr-container {{
+    flex: 1 1 220px;
+    max-width: 260px;
+  }}
+  .qr-label {{
+    font-weight: 600;
+    color: var(--accent);
+    margin-bottom: 0.4rem;
+  }}
   .input-group {{
     margin: 1rem 0;
   }}
@@ -289,13 +335,7 @@ def main() -> None:
       <ol>
         <li>
           <strong>Scan or Download:</strong> Point your phone's camera at the QR code below, or click the direct download link if viewing this page on your phone:
-          <div class="qr-container">
-            <img src="qr.png" alt="MicroTasking APK QR Code">
-            <br>
-            <a href="{args.url}" class="btn" target="_blank" rel="noopener">Download MicroTasking APK ({display_version})</a>
-            <br>
-            <a href="{args.url}" target="_blank" rel="noopener">Open the download again</a>
-          </div>
+          {qr_section_html}
         </li>
         <li>
           <strong>Allow Sideloading (First Time Only):</strong>

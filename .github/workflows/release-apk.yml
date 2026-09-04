@@ -33,7 +33,16 @@ jobs:
           BUILD_NUMBER="${{ github.run_number }}"
           VERSION_NAME="${VERSION_BASE}-${BUILD_NUMBER}"
           VERSION_CODE=$(date -u +%s)
-          TAG="v${VERSION_NAME}"
+          BRANCH="${GITHUB_REF_NAME}"
+          # Main keeps the plain "vBASE-N" tag so it stays the pattern "Find latest main
+          # release" below matches; every other branch gets its name appended so its releases
+          # never collide with main's and can be told apart at a glance.
+          if [ "$BRANCH" = "main" ]; then
+            TAG="v${VERSION_NAME}"
+          else
+            SAFE_BRANCH=$(echo "$BRANCH" | tr -c 'A-Za-z0-9._-' '-')
+            TAG="v${VERSION_NAME}-${SAFE_BRANCH}"
+          fi
           echo "version_base=$VERSION_BASE" >> "$GITHUB_OUTPUT"
           echo "build_number=$BUILD_NUMBER" >> "$GITHUB_OUTPUT"
           echo "build_timestamp=$BUILD_TIMESTAMP" >> "$GITHUB_OUTPUT"
@@ -42,7 +51,7 @@ jobs:
           echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "asset_name=MicroTasking-$TAG.apk" >> "$GITHUB_OUTPUT"
-          echo "git_branch=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          echo "git_branch=$BRANCH" >> "$GITHUB_OUTPUT"
 
       - name: Build debug APK
         run: |
@@ -66,6 +75,23 @@ jobs:
           name: "MicroTasking ${{ steps.version.outputs.tag }}"
           files: dist/${{ steps.version.outputs.asset_name }}
 
+      - name: Find latest main release
+        id: mainrelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          MAIN_TAG=""
+          if [ "${{ steps.version.outputs.git_branch }}" != "main" ]; then
+            MAIN_TAG=$(gh release list --limit 50 --json tagName,createdAt \
+              | jq -r '[.[] | select(.tagName | test("^v[0-9]+\\.[0-9]+\\.[0-9]+-[0-9]+$"))] | sort_by(.createdAt) | last | .tagName // empty')
+          fi
+          echo "main_tag=$MAIN_TAG" >> "$GITHUB_OUTPUT"
+          if [ -n "$MAIN_TAG" ]; then
+            echo "main_url=https://github.com/${{ github.repository }}/releases/download/$MAIN_TAG/MicroTasking-$MAIN_TAG.apk" >> "$GITHUB_OUTPUT"
+          else
+            echo "main_url=" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Install QR code generator
         run: pip install --quiet "qrcode[pil]"
 
@@ -74,6 +100,9 @@ jobs:
           python scripts/generate_install_page.py \
             --url "https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.tag }}/${{ steps.version.outputs.asset_name }}" \
             --version "${{ steps.version.outputs.tag }}" \
+            --branch "${{ steps.version.outputs.git_branch }}" \
+            --main-url "${{ steps.mainrelease.outputs.main_url }}" \
+            --main-version "${{ steps.mainrelease.outputs.main_tag }}" \
             --template-url "https://docs.google.com/spreadsheets/d/1Ss15J7afOl3HON6h2dI8f8hGi8JYjH0hRywuV0nCYOg/edit?usp=sharing" \
             --out docs
 
