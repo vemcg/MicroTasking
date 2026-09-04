@@ -52,6 +52,7 @@ import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -236,9 +237,8 @@ fun MicroTaskingApp(
     var savedUserTasks by remember { mutableStateOf(userTasks) }
     var savedManagedTasks by remember { mutableStateOf(managedTasks) }
     var savedDeclineCounts by remember { mutableStateOf(declineCounts) }
-    var totalCompletedCount by remember { mutableIntStateOf(0) }
     var streak by remember { mutableIntStateOf(0) }
-    var attemptedCount by remember { mutableIntStateOf(0) }
+    var longestStreak by remember { mutableIntStateOf(0) }
     var lastTaskCompleted by remember { mutableStateOf(true) }
     var backgroundPromptsRunning by remember { mutableStateOf(true) }
     var isImportingSheet by remember { mutableStateOf(false) }
@@ -259,7 +259,6 @@ fun MicroTaskingApp(
     fun receiveQueuedTask(task: ManagedTask) {
         val activeTasks = taskQueue.filter { it.isActionable() }
         if (activeTasks.size >= savedMaxQueueSize) {
-            attemptedCount++
             lastTaskCompleted = false
             streak = 0
         }
@@ -395,9 +394,8 @@ fun MicroTaskingApp(
         )
     } else if (showingScore || shouldShowScoreInsteadOfTasks) {
         ScoreScreen(
-            totalCompletedCount = totalCompletedCount,
             streak = streak,
-            attemptedCount = attemptedCount,
+            longestStreak = longestStreak,
             taskCompleted = lastTaskCompleted,
             hasQueuedTasks = visibleTaskEntries.isNotEmpty(),
             backgroundPromptsRunning = backgroundPromptsRunning,
@@ -414,24 +412,24 @@ fun MicroTaskingApp(
         TaskPromptScreen(
             taskEntries = visibleTaskEntries,
             streak = streak,
+            maxQueueSize = savedMaxQueueSize,
             onOpenSettings = { showingSettings = true },
+            onOpenScore = { showingScore = true },
             onStart = { taskId ->
                 taskQueue = taskQueue.map {
                     if (it.task.id == taskId) it.start() else it
                 }
             },
             onComplete = { taskId ->
-                totalCompletedCount++
-                attemptedCount++
                 lastTaskCompleted = true
                 streak++
+                if (streak > longestStreak) longestStreak = streak
                 taskQueue = taskQueue.map {
                     if (it.task.id == taskId) it.complete() else it
                 }
                 showingScore = true
             },
             onAbandon = { taskId ->
-                attemptedCount++
                 lastTaskCompleted = false
                 streak = 0
                 taskQueue = taskQueue.map {
@@ -453,7 +451,6 @@ fun MicroTaskingApp(
                     taskId to (savedDeclineCounts[taskId] ?: 0) + 1
                 )
                 onDeclineCountsSaved(savedDeclineCounts)
-                attemptedCount++
                 lastTaskCompleted = false
                 streak = 0
                 taskQueue = taskQueue.filter { it.task.id != taskId }
@@ -472,7 +469,9 @@ fun MicroTaskingApp(
 fun TaskPromptScreen(
     taskEntries: List<TaskStackEntry>,
     streak: Int,
+    maxQueueSize: Int,
     onOpenSettings: () -> Unit,
+    onOpenScore: () -> Unit,
     onStart: (String) -> Unit,
     onComplete: (String) -> Unit,
     onAbandon: (String) -> Unit,
@@ -484,6 +483,7 @@ fun TaskPromptScreen(
         TopAppBar(
             title = { Text("MicroTasking") },
             actions = {
+                TextButton(onClick = onOpenScore) { Text("Score") }
                 IconButton(onClick = onOpenSettings) {
                     Icon(Icons.Filled.Settings, contentDescription = "Settings")
                 }
@@ -497,7 +497,10 @@ fun TaskPromptScreen(
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             item {
-                Text("Task queue: ${taskEntries.size} active", style = MaterialTheme.typography.labelLarge)
+                Text(
+                    "Task queue: ${taskEntries.size} active of $maxQueueSize",
+                    style = MaterialTheme.typography.labelLarge
+                )
             }
 
             items(taskEntries, key = { it.task.id }) { entry ->
@@ -538,12 +541,14 @@ fun TaskPromptScreen(
                 }
             }
 
-            item {
-                Text(
-                    text = "Streak: $streak",
-                    modifier = Modifier.padding(top = 8.dp),
-                    style = MaterialTheme.typography.bodyLarge
-                )
+            if (streak > 0) {
+                item {
+                    Text(
+                        text = "$streak in a row",
+                        modifier = Modifier.padding(top = 8.dp),
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                }
             }
         }
     }
@@ -552,9 +557,8 @@ fun TaskPromptScreen(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ScoreScreen(
-    totalCompletedCount: Int,
     streak: Int,
-    attemptedCount: Int,
+    longestStreak: Int,
     taskCompleted: Boolean,
     hasQueuedTasks: Boolean,
     backgroundPromptsRunning: Boolean,
@@ -562,13 +566,7 @@ fun ScoreScreen(
     onBackgroundPromptsChanged: (Boolean) -> Unit,
     onReturnToTaskList: () -> Unit
 ) {
-    val scorePercent = if (attemptedCount == 0) 0 else totalCompletedCount * 100 / attemptedCount
-    val scoreColor = when {
-        scorePercent >= 80 -> Color(0xFF2E7D32)
-        scorePercent >= 50 -> Color(0xFF8A6000)
-        else -> Color(0xFFC62828)
-    }
-    LaunchedEffect(attemptedCount, hasQueuedTasks) {
+    LaunchedEffect(streak, hasQueuedTasks) {
         if (hasQueuedTasks) {
             delay(5_000)
             onReturnToTaskList()
@@ -578,6 +576,7 @@ fun ScoreScreen(
         TopAppBar(
             title = { Text("MicroTasking") },
             actions = {
+                TextButton(onClick = onReturnToTaskList) { Text("Task List") }
                 IconButton(onClick = onOpenSettings) {
                     Icon(Icons.Filled.Settings, contentDescription = "Settings")
                 }
@@ -595,20 +594,23 @@ fun ScoreScreen(
                 style = MaterialTheme.typography.headlineMedium,
                 color = if (taskCompleted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
             )
+            if (streak > 0) {
+                Text(
+                    text = "$streak in a row",
+                    modifier = Modifier.padding(top = 16.dp),
+                    style = MaterialTheme.typography.displayMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
             Text(
-                text = "Score",
+                text = "Longest streak",
                 modifier = Modifier.padding(top = 32.dp),
                 style = MaterialTheme.typography.labelLarge
             )
-            Text("Today: $scorePercent%", color = scoreColor)
-            Text("This week: $scorePercent%", color = scoreColor)
-            Text("This month: $scorePercent%", color = scoreColor)
-            Text("All time: $scorePercent%", color = scoreColor)
-            Text(
-                text = "Streak: $streak",
-                modifier = Modifier.padding(top = 20.dp),
-                style = MaterialTheme.typography.bodyLarge
-            )
+            Text("Today: $longestStreak")
+            Text("This week: $longestStreak")
+            Text("This month: $longestStreak")
+            Text("All time: $longestStreak")
             if (!backgroundPromptsRunning) {
                 Text(
                     text = "Background prompts are stopped.",
@@ -620,17 +622,9 @@ fun ScoreScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 24.dp),
-                onClick = onReturnToTaskList
-            ) {
-                Text("Back to task list")
-            }
-            Button(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 12.dp),
                 onClick = { onBackgroundPromptsChanged(!backgroundPromptsRunning) }
             ) {
-                Text(if (backgroundPromptsRunning) "Stop background prompts" else "Start background prompts")
+                Text(if (backgroundPromptsRunning) "Pause task queue" else "Resume task queue")
             }
         }
     }
