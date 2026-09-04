@@ -12,12 +12,15 @@ Next work session: make onboarding, import, persistence, versioning, and update 
 
 2. **Google Sheet task source and onboarding** — DONE (2026-09-03)
    - Categories are now driven by Google Sheet tab names: `importExternalTasksFromSheet`
-     fetches the spreadsheet's worksheet feed to list tab names, fetches each tab's rows by
-     name via the `gviz/tq` CSV export, and uses each tab name as the task category. A tab
-     named `README` (case-insensitive) is skipped and never becomes a category.
+     lists tab names by downloading the spreadsheet as `.xlsx` and reading `xl/workbook.xml`
+     from the zip (the old GData "worksheets feed" is dead - confirmed via a live request, it
+     now 404s - kept as a secondary fallback attempt only), fetches each tab's rows by name
+     via the `gviz/tq` CSV export, and uses each tab name as the task category. A tab named
+     `README` (case-insensitive) is skipped and never becomes a category. Verified end to end
+     against the real production template sheet.
    - Import now runs on a background coroutine (`Dispatchers.IO`) instead of blocking the
-     main thread, and Settings shows a real "Importing..." / result message instead of a
-     fire-and-forget "Import started." label.
+     main thread, and Settings shows a real result message ("Imported N tasks across M
+     categories", or an actionable failure reason) instead of a fire-and-forget label.
    - Settings/Task Pool/My Tasks no longer offer a fixed hardcoded category list - available
      categories are derived from whatever's currently in the pool, so category options only
      appear once a Sheet has been imported (or a task created locally with a custom category).

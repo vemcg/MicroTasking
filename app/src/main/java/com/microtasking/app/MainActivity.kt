@@ -260,10 +260,11 @@ fun MicroTaskingApp(
         isImportingSheet = true
         sheetImportMessage = null
         coroutineScope.launch {
-            val importedTasks = withContext(Dispatchers.IO) {
+            val result = withContext(Dispatchers.IO) {
                 importExternalTasksFromSheet(url)
             }
             isImportingSheet = false
+            val importedTasks = result.tasks
             if (importedTasks.isNotEmpty()) {
                 savedManagedTasks = importedTasks + savedManagedTasks.filter { task ->
                     task.category !in importedTasks.map { it.category }
@@ -271,8 +272,12 @@ fun MicroTaskingApp(
                 onManagedTasksSaved(savedManagedTasks)
                 val categoryCount = importedTasks.map { it.category }.distinct().size
                 sheetImportMessage = "Imported ${importedTasks.size} tasks across $categoryCount categories."
+            } else if (result.tabNames.isNotEmpty()) {
+                sheetImportMessage = "Found tabs (${result.tabNames.joinToString(", ")}) but no task rows in them. " +
+                    "Check that row 1 of each tab has a \"description\" column header."
             } else {
-                sheetImportMessage = "No tasks found. Check the Sheet URL, sharing settings, and tab names."
+                sheetImportMessage = "Couldn't read any tabs from this Sheet. Check the URL and that sharing is " +
+                    "\"Anyone with the link can view\"."
             }
         }
     }
@@ -1348,7 +1353,37 @@ fun parseExternalTaskCsv(csvText: String, categoryName: String): List<ManagedTas
 private fun extractGoogleSheetId(url: String): String? =
     Regex("/spreadsheets/d/([a-zA-Z0-9_-]+)").find(url)?.groupValues?.getOrNull(1)
 
-/** Lists the spreadsheet's tab names in order, via the legacy public worksheet feed (no auth needed for "Anyone with the link" sheets). */
+private fun unescapeXmlEntities(text: String): String = text
+    .replace("&amp;", "&")
+    .replace("&quot;", "\"")
+    .replace("&apos;", "'")
+    .replace("&lt;", "<")
+    .replace("&gt;", ">")
+
+/**
+ * Lists the spreadsheet's tab names in order by downloading the full workbook as .xlsx (a
+ * plain still-supported export, unlike the old GData worksheets feed below) and reading the
+ * sheet names straight out of the zip's xl/workbook.xml entry - no need to parse actual cell
+ * data out of the xlsx, since tab data is still fetched per-name via the gviz CSV export.
+ */
+private fun fetchSheetTabNamesViaXlsx(spreadsheetId: String): List<String> = runCatching {
+    val url = URL("https://docs.google.com/spreadsheets/d/$spreadsheetId/export?format=xlsx")
+    java.util.zip.ZipInputStream(url.openStream()).use { zip ->
+        var entry = zip.nextEntry
+        while (entry != null) {
+            if (entry.name == "xl/workbook.xml") {
+                val xml = zip.readBytes().toString(Charsets.UTF_8)
+                return@runCatching Regex("<sheet[^>]*\\sname=\"([^\"]+)\"").findAll(xml)
+                    .map { unescapeXmlEntities(it.groupValues[1]) }
+                    .toList()
+            }
+            entry = zip.nextEntry
+        }
+        emptyList()
+    }
+}.getOrDefault(emptyList())
+
+/** Lists the spreadsheet's tab names via the legacy public worksheet feed - kept as a secondary attempt since Google has deprecated this GData API for many accounts. */
 private fun fetchSheetTabNames(spreadsheetId: String): List<String> = runCatching {
     val feedUrl = "https://spreadsheets.google.com/feeds/worksheets/$spreadsheetId/public/basic?alt=json"
     val feed = JSONObject(URL(feedUrl).readText()).optJSONObject("feed") ?: return@runCatching emptyList()
@@ -1367,21 +1402,28 @@ private fun fetchSheetTabCsv(spreadsheetId: String, tabName: String): String = r
     URL(url).readText()
 }.getOrDefault("")
 
-fun importExternalTasksFromSheet(url: String): List<ManagedTask> {
-    val spreadsheetId = extractGoogleSheetId(url) ?: return emptyList()
-    val tabNames = fetchSheetTabNames(spreadsheetId).filter { !it.equals("README", ignoreCase = true) }
+data class SheetImportResult(val tasks: List<ManagedTask>, val tabNames: List<String>)
+
+fun importExternalTasksFromSheet(url: String): SheetImportResult {
+    val spreadsheetId = extractGoogleSheetId(url) ?: return SheetImportResult(emptyList(), emptyList())
+    val tabNames = fetchSheetTabNamesViaXlsx(spreadsheetId)
+        .ifEmpty { fetchSheetTabNames(spreadsheetId) }
+        .filter { !it.equals("README", ignoreCase = true) }
 
     if (tabNames.isNotEmpty()) {
-        return tabNames.flatMap { tabName -> parseExternalTaskCsv(fetchSheetTabCsv(spreadsheetId, tabName), tabName) }
+        val tasks = tabNames.flatMap { tabName -> parseExternalTaskCsv(fetchSheetTabCsv(spreadsheetId, tabName), tabName) }
+        return SheetImportResult(tasks, tabNames)
     }
 
-    // Worksheet feed unavailable (e.g. sharing settings blocked it) - fall back to a single
+    // Tab enumeration unavailable (e.g. sharing settings blocked it) - fall back to a single
     // CSV export so import still works, just without per-tab categories.
-    return runCatching {
+    val fallbackTasks = runCatching {
         val csv = URL(normalizeGoogleSheetCsvUrl(url)).readText()
         parseExternalTaskCsv(csv, "Imported")
     }.getOrDefault(emptyList())
+    return SheetImportResult(fallbackTasks, emptyList())
 }
+
 
 data class UserTask(val description: String, val category: String, val enabled: Boolean)
 
