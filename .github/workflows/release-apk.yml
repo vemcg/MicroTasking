@@ -40,7 +40,7 @@ jobs:
           if [ "$BRANCH" = "main" ]; then
             TAG="v${VERSION_NAME}"
           else
-            SAFE_BRANCH=$(echo "$BRANCH" | tr -c 'A-Za-z0-9._-' '-')
+            SAFE_BRANCH=$(printf '%s' "$BRANCH" | tr -c 'A-Za-z0-9._-' '-')
             TAG="v${VERSION_NAME}-${SAFE_BRANCH}"
           fi
           echo "version_base=$VERSION_BASE" >> "$GITHUB_OUTPUT"
