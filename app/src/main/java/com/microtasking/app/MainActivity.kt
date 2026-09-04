@@ -211,7 +211,9 @@ fun MicroTaskingApp(
     onSheetUrlSaved: (String) -> Unit,
     onBackgroundPromptsChanged: (Boolean) -> Unit
 ) {
-    var showingSettings by remember { mutableStateOf(!setupComplete) }
+    var showingSettings by remember {
+        mutableStateOf(!setupComplete || (managedTasks.isEmpty() && userTasks.isEmpty()))
+    }
     var showingMyTasks by remember { mutableStateOf(false) }
     var showingTaskPool by remember { mutableStateOf(false) }
     var showingQrScanner by remember { mutableStateOf(false) }
@@ -235,7 +237,6 @@ fun MicroTaskingApp(
     val coroutineScope = rememberCoroutineScope()
     val availableCategories = (savedManagedTasks.map { it.category } + savedUserTasks.map { it.category })
         .distinct()
-        .sorted()
     val promptTasks = eligiblePromptTasks(savedManagedTasks, savedUserTasks, savedCategories)
     var taskQueue by remember(promptTasks, savedMaxQueueSize) {
         mutableStateOf(makeTaskStack(promptTasks, maxEntries = savedMaxQueueSize))
@@ -983,7 +984,7 @@ fun TaskPoolScreen(
     onBack: () -> Unit,
     onTasksChanged: (List<ManagedTask>) -> Unit
 ) {
-    val poolCategories = tasks.map { it.category }.distinct().sorted()
+    val poolCategories = tasks.map { it.category }.distinct()
     var categoryFilter by remember { mutableStateOf("All categories") }
     var description by remember { mutableStateOf("") }
     var newTaskCategory by remember { mutableStateOf("") }
