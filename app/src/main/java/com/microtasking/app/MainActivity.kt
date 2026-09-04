@@ -239,10 +239,12 @@ fun MicroTaskingApp(
     var streak by remember { mutableIntStateOf(0) }
     var longestStreak by remember { mutableIntStateOf(0) }
     var lastTaskCompleted by remember { mutableStateOf(true) }
+    var scoreEntryToken by remember { mutableIntStateOf(0) }
     var backgroundPromptsRunning by remember { mutableStateOf(true) }
     var isImportingSheet by remember { mutableStateOf(false) }
     var sheetImportMessage by remember { mutableStateOf<String?>(null) }
     val coroutineScope = rememberCoroutineScope()
+    val context = LocalContext.current
     val availableCategories = (savedManagedTasks.map { it.category } + savedUserTasks.map { it.category })
         .distinct()
     val activeCategoryOrder = availableCategories.filter { it in savedCategories }
@@ -260,6 +262,7 @@ fun MicroTaskingApp(
         }
         taskQueue = activeTasks.takeLast(savedMaxQueueSize - 1) + TaskStackEntry(task)
         showingScore = false
+        PromptNotifier.show(context)
     }
 
     fun runSheetImport(url: String) {
@@ -396,7 +399,7 @@ fun MicroTaskingApp(
             streak = streak,
             longestStreak = longestStreak,
             taskCompleted = lastTaskCompleted,
-            hasQueuedTasks = visibleTaskEntries.isNotEmpty(),
+            entryToken = scoreEntryToken,
             backgroundPromptsRunning = backgroundPromptsRunning,
             onOpenSettings = { showingSettings = true },
             onBackgroundPromptsChanged = { enabled ->
@@ -413,7 +416,10 @@ fun MicroTaskingApp(
             streak = streak,
             maxQueueSize = savedMaxQueueSize,
             onOpenSettings = { showingSettings = true },
-            onOpenScore = { showingScore = true },
+            onOpenScore = {
+                scoreEntryToken++
+                showingScore = true
+            },
             onStart = { taskId ->
                 taskQueue = taskQueue.map {
                     if (it.task.id == taskId) it.start() else it
@@ -426,6 +432,7 @@ fun MicroTaskingApp(
                 taskQueue = taskQueue.map {
                     if (it.task.id == taskId) it.complete() else it
                 }
+                scoreEntryToken++
                 showingScore = true
             },
             onAbandon = { taskId ->
@@ -434,6 +441,7 @@ fun MicroTaskingApp(
                 taskQueue = taskQueue.map {
                     if (it.task.id == taskId) it.abandon() else it
                 }
+                scoreEntryToken++
                 showingScore = true
             },
             onDefer = { taskId, days ->
@@ -453,6 +461,7 @@ fun MicroTaskingApp(
                 lastTaskCompleted = false
                 streak = 0
                 taskQueue = taskQueue.filter { it.task.id != taskId }
+                scoreEntryToken++
                 showingScore = true
             },
             onNextPrompt = {
@@ -559,17 +568,15 @@ fun ScoreScreen(
     streak: Int,
     longestStreak: Int,
     taskCompleted: Boolean,
-    hasQueuedTasks: Boolean,
+    entryToken: Int,
     backgroundPromptsRunning: Boolean,
     onOpenSettings: () -> Unit,
     onBackgroundPromptsChanged: (Boolean) -> Unit,
     onReturnToTaskList: () -> Unit
 ) {
-    LaunchedEffect(streak, hasQueuedTasks) {
-        if (hasQueuedTasks) {
-            delay(5_000)
-            onReturnToTaskList()
-        }
+    LaunchedEffect(entryToken) {
+        delay(5_000)
+        onReturnToTaskList()
     }
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
