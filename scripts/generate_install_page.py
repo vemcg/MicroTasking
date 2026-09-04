@@ -128,8 +128,8 @@ def main() -> None:
 
     if show_main_qr:
         qr_section_html = f"""<div class="qr-row">
-            {qr_block(args.main_url, main_display_version, "qr-main.png", "Main branch")}
-            {qr_block(args.url, display_version, "qr.png", f"Active branch ({args.branch})")}
+            {qr_block(args.main_url, main_display_version, "qr-main.png", "Stable Release")}
+            {qr_block(args.url, display_version, "qr.png", args.branch)}
           </div>"""
     else:
         qr_section_html = qr_block(args.url, display_version, "qr.png")
