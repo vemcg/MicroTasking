@@ -186,9 +186,9 @@
           <div class="qr-container">
             <img src="qr.png" alt="MicroTasking APK QR Code">
             <br>
-            <a href="https://github.com/vemcg/MicroTasking/releases/download/v0.1.7-21/MicroTasking-v0.1.7-21.apk" class="btn" target="_blank" rel="noopener">Download MicroTasking APK (v0.1.7-21)</a>
+            <a href="https://github.com/vemcg/MicroTasking/releases/download/v0.1.7-22/MicroTasking-v0.1.7-22.apk" class="btn" target="_blank" rel="noopener">Download MicroTasking APK (v0.1.7-22)</a>
             <br>
-            <a href="https://github.com/vemcg/MicroTasking/releases/download/v0.1.7-21/MicroTasking-v0.1.7-21.apk" target="_blank" rel="noopener">Open the download again</a>
+            <a href="https://github.com/vemcg/MicroTasking/releases/download/v0.1.7-22/MicroTasking-v0.1.7-22.apk" target="_blank" rel="noopener">Open the download again</a>
           </div>
         </li>
         <li>
@@ -218,7 +218,7 @@
         <li>Paste your URL into the box below:</li>
       </ol>
       <div class="input-group">
-        <input type="url" id="sheetUrl" placeholder="https://docs.google.com/spreadsheets/d/your-sheet-id/edit..." oninput="generateSheetQr()">
+        <input type="url" id="sheetUrl" placeholder="https://docs.google.com/spreadsheets/d/your-sheet-id/edit..." oninput="generateSheetQr()" onfocus="this.select()">
       </div>
       <div class="qr-container" id="sheetQrContainer" style="display:none;">
         <p style="margin-bottom: 0.5rem; font-weight: 600; color: var(--accent);">Your Sheet QR Code:</p>
@@ -243,13 +243,16 @@
   </main>
 
   <script>
+    const SHEET_URL_STORAGE_KEY = 'microtaskingSheetUrl';
+
     function generateSheetQr() {
       const input = document.getElementById('sheetUrl').value.trim();
       const container = document.getElementById('sheetQrContainer');
       const qrDiv = document.getElementById('sheetQr');
-      
+
       qrDiv.innerHTML = '';
       if (input.length > 10) {
+        localStorage.setItem(SHEET_URL_STORAGE_KEY, input);
         container.style.display = 'block';
         new QRCode(qrDiv, {
           text: input,
@@ -260,9 +263,18 @@
           correctLevel : QRCode.CorrectLevel.M
         });
       } else {
+        localStorage.removeItem(SHEET_URL_STORAGE_KEY);
         container.style.display = 'none';
       }
     }
+
+    (function restoreSheetUrl() {
+      const saved = localStorage.getItem(SHEET_URL_STORAGE_KEY);
+      if (saved) {
+        document.getElementById('sheetUrl').value = saved;
+        generateSheetQr();
+      }
+    })();
   </script>
 </body>
 </html>
