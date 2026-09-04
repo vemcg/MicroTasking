@@ -5,7 +5,14 @@ import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Build
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.Preview
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -45,6 +52,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -57,10 +65,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.material3.lightColorScheme
+import androidx.core.content.ContextCompat
+import com.google.mlkit.vision.barcode.BarcodeScanning
+import com.google.mlkit.vision.barcode.common.Barcode
+import com.google.mlkit.vision.common.InputImage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -134,6 +148,11 @@ class MainActivity : ComponentActivity() {
                                 .putString("task_decline_counts", writeDeclineCounts(counts))
                                 .apply()
                         },
+                        onSheetUrlSaved = { sheetUrl ->
+                            preferences.edit()
+                                .putString("external_sheet_url", sheetUrl)
+                                .apply()
+                        },
                         onBackgroundPromptsChanged = { enabled ->
                             preferences.edit().putBoolean("background_prompts_enabled", enabled).apply()
                             if (enabled) {
@@ -189,11 +208,13 @@ fun MicroTaskingApp(
     onUserTasksSaved: (List<UserTask>) -> Unit,
     onManagedTasksSaved: (List<ManagedTask>) -> Unit,
     onDeclineCountsSaved: (Map<String, Int>) -> Unit,
+    onSheetUrlSaved: (String) -> Unit,
     onBackgroundPromptsChanged: (Boolean) -> Unit
 ) {
     var showingSettings by remember { mutableStateOf(!setupComplete) }
     var showingMyTasks by remember { mutableStateOf(false) }
     var showingTaskPool by remember { mutableStateOf(false) }
+    var showingQrScanner by remember { mutableStateOf(false) }
     var showingScore by remember { mutableStateOf(false) }
     var savedCategories by remember { mutableStateOf(selectedCategories) }
     var savedStartHour by remember { mutableStateOf(startHour) }
@@ -235,6 +256,27 @@ fun MicroTaskingApp(
         showingScore = false
     }
 
+    fun runSheetImport(url: String) {
+        isImportingSheet = true
+        sheetImportMessage = null
+        coroutineScope.launch {
+            val importedTasks = withContext(Dispatchers.IO) {
+                importExternalTasksFromSheet(url)
+            }
+            isImportingSheet = false
+            if (importedTasks.isNotEmpty()) {
+                savedManagedTasks = importedTasks + savedManagedTasks.filter { task ->
+                    task.category !in importedTasks.map { it.category }
+                }
+                onManagedTasksSaved(savedManagedTasks)
+                val categoryCount = importedTasks.map { it.category }.distinct().size
+                sheetImportMessage = "Imported ${importedTasks.size} tasks across $categoryCount categories."
+            } else {
+                sheetImportMessage = "No tasks found. Check the Sheet URL, sharing settings, and tab names."
+            }
+        }
+    }
+
     LaunchedEffect(savedRapidTestMode, backgroundPromptsRunning, promptTasks) {
         if (!savedRapidTestMode || !backgroundPromptsRunning || promptTasks.isEmpty()) {
             return@LaunchedEffect
@@ -250,7 +292,17 @@ fun MicroTaskingApp(
         }
     }
 
-    if (showingTaskPool) {
+    if (showingQrScanner) {
+        QrScannerScreen(
+            onResult = { scannedUrl ->
+                showingQrScanner = false
+                savedSheetUrl = scannedUrl
+                onSheetUrlSaved(scannedUrl)
+                runSheetImport(scannedUrl)
+            },
+            onCancel = { showingQrScanner = false }
+        )
+    } else if (showingTaskPool) {
         TaskPoolScreen(
             tasks = savedManagedTasks,
             onBack = { showingTaskPool = false },
@@ -283,26 +335,8 @@ fun MicroTaskingApp(
             importMessage = sheetImportMessage,
             onOpenMyTasks = { showingMyTasks = true },
             onOpenTaskPool = { showingTaskPool = true },
-            onSyncSheet = { url ->
-                isImportingSheet = true
-                sheetImportMessage = null
-                coroutineScope.launch {
-                    val importedTasks = withContext(Dispatchers.IO) {
-                        importExternalTasksFromSheet(url)
-                    }
-                    isImportingSheet = false
-                    if (importedTasks.isNotEmpty()) {
-                        savedManagedTasks = importedTasks + savedManagedTasks.filter { task ->
-                            task.category !in importedTasks.map { it.category }
-                        }
-                        onManagedTasksSaved(savedManagedTasks)
-                        val categoryCount = importedTasks.map { it.category }.distinct().size
-                        sheetImportMessage = "Imported ${importedTasks.size} tasks across $categoryCount categories."
-                    } else {
-                        sheetImportMessage = "No tasks found. Check the Sheet URL, sharing settings, and tab names."
-                    }
-                }
-            },
+            onOpenQrScanner = { showingQrScanner = true },
+            onSyncSheet = { url -> runSheetImport(url) },
             onSave = { categories, start, end, prompts, rapidMode, queueSize, sheetUrl ->
                 savedCategories = categories
                 savedStartHour = start
@@ -576,6 +610,7 @@ fun SettingsScreen(
     importMessage: String? = null,
     onOpenMyTasks: () -> Unit,
     onOpenTaskPool: () -> Unit,
+    onOpenQrScanner: () -> Unit,
     onSyncSheet: (String) -> Unit,
     onSave: (Set<String>, String, String, String, Boolean, Int, String) -> Unit
 ) {
@@ -586,8 +621,6 @@ fun SettingsScreen(
     var rapidTestMode by remember { mutableStateOf(initialRapidTestMode) }
     var maxQueueSize by remember { mutableStateOf(initialMaxQueueSize.toString()) }
     var sheetUrl by remember { mutableStateOf(initialSheetUrl) }
-    var showQrScannerDialog by remember { mutableStateOf(false) }
-    var qrEntry by remember { mutableStateOf(initialSheetUrl) }
     var categoriesExpanded by remember { mutableStateOf(true) }
     var scheduleExpanded by remember { mutableStateOf(true) }
     var externalPoolExpanded by remember { mutableStateOf(true) }
@@ -636,7 +669,7 @@ fun SettingsScreen(
                         }
                         if (externalPoolExpanded) {
                             Text(
-                                "Paste your Google Sheet URL first. The onboarding page will generate its QR code, which you can scan here to load the URL. Each tab in the sheet (except a tab named \"README\") becomes a task category.",
+                                "Paste your Google Sheet URL into the onboarding page, then tap Scan QR Code below to register it here with your phone's camera. Each tab in the sheet (except a tab named \"README\") becomes a task category. Tasks import automatically right after a scan; use Update Tasks any time afterward to re-sync.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -650,19 +683,16 @@ fun SettingsScreen(
                             )
                             Button(
                                 modifier = Modifier.fillMaxWidth(),
-                                onClick = {
-                                    qrEntry = sheetUrl
-                                    showQrScannerDialog = true
-                                }
+                                onClick = onOpenQrScanner
                             ) {
-                                Text("Scan QR Code to Load URL")
+                                Text("Scan QR Code")
                             }
                             Button(
                                 modifier = Modifier.fillMaxWidth(),
                                 enabled = sheetUrl.isNotBlank() && !isImportingSheet,
                                 onClick = { onSyncSheet(sheetUrl.trim()) }
                             ) {
-                                Text(if (isImportingSheet) "Importing..." else "Import / Synchronize")
+                                Text(if (isImportingSheet) "Updating..." else "Update Tasks")
                             }
                             if (importMessage != null) {
                                 Text(
@@ -853,37 +883,91 @@ fun SettingsScreen(
             }
         }
     }
+}
 
-    if (showQrScannerDialog) {
-        AlertDialog(
-            onDismissRequest = { showQrScannerDialog = false },
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun QrScannerScreen(onResult: (String) -> Unit, onCancel: () -> Unit) {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var hasCameraPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        hasCameraPermission = granted
+    }
+    LaunchedEffect(Unit) {
+        if (!hasCameraPermission) permissionLauncher.launch(Manifest.permission.CAMERA)
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        TopAppBar(
             title = { Text("Scan Sheet QR Code") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Paste the QR result or sheet URL here to populate the spreadsheet link.")
-                    OutlinedTextField(
-                        value = qrEntry,
-                        onValueChange = { qrEntry = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Sheet URL") },
-                        singleLine = true
-                    )
-                }
-            },
-            confirmButton = {
-                Button(onClick = {
-                    sheetUrl = qrEntry.trim()
-                    showQrScannerDialog = false
-                }) {
-                    Text("Use This URL")
-                }
-            },
-            dismissButton = {
-                Button(onClick = { showQrScannerDialog = false }) {
-                    Text("Cancel")
+            navigationIcon = {
+                IconButton(onClick = onCancel) {
+                    Icon(Icons.Filled.ArrowBack, contentDescription = "Cancel scan")
                 }
             }
         )
+        if (hasCameraPermission) {
+            var hasScanned by remember { mutableStateOf(false) }
+            var cameraProvider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
+            DisposableEffect(Unit) {
+                onDispose { cameraProvider?.unbindAll() }
+            }
+            AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { ctx ->
+                    val previewView = PreviewView(ctx)
+                    val scanner = BarcodeScanning.getClient()
+                    val executor = ContextCompat.getMainExecutor(ctx)
+                    val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
+                    cameraProviderFuture.addListener({
+                        val provider = cameraProviderFuture.get()
+                        cameraProvider = provider
+                        val preview = Preview.Builder().build().also {
+                            it.setSurfaceProvider(previewView.surfaceProvider)
+                        }
+                        val analysis = ImageAnalysis.Builder()
+                            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                            .build()
+                        analysis.setAnalyzer(executor) { imageProxy ->
+                            val mediaImage = imageProxy.image
+                            if (mediaImage != null && !hasScanned) {
+                                val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
+                                scanner.process(image)
+                                    .addOnSuccessListener { barcodes ->
+                                        val value = barcodes.firstOrNull { !it.rawValue.isNullOrBlank() }?.rawValue
+                                        if (!hasScanned && !value.isNullOrBlank()) {
+                                            hasScanned = true
+                                            onResult(value)
+                                        }
+                                    }
+                                    .addOnCompleteListener { imageProxy.close() }
+                            } else {
+                                imageProxy.close()
+                            }
+                        }
+                        provider.unbindAll()
+                        provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
+                    }, executor)
+                    previewView
+                }
+            )
+        } else {
+            Column(
+                modifier = Modifier.fillMaxSize().padding(24.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text("Camera permission is required to scan a QR code.", modifier = Modifier.padding(bottom = 12.dp))
+                Button(onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) }) {
+                    Text("Grant camera permission")
+                }
+            }
+        }
     }
 }
 

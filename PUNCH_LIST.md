@@ -21,9 +21,12 @@ Next work session: make onboarding, import, persistence, versioning, and update 
    - Settings/Task Pool/My Tasks no longer offer a fixed hardcoded category list - available
      categories are derived from whatever's currently in the pool, so category options only
      appear once a Sheet has been imported (or a task created locally with a custom category).
-   - Still open: the in-app "Scan QR Code to Load URL" control is a paste-the-result dialog,
-     not an actual camera scan - real camera-based QR scanning (e.g. CameraX + ML Kit barcode
-     scanning) is unimplemented and is a separate, larger follow-up.
+   - Real camera-based QR scanning implemented (CameraX + ML Kit barcode scanning):
+     Settings' "Scan QR Code" button opens a full-screen live camera scanner
+     (`QrScannerScreen`), requesting the `CAMERA` permission on demand. A successful scan
+     registers the decoded URL immediately (persisted right away, not gated behind "Save
+     Settings") and automatically runs one import. A separate "Update Tasks" button lets the
+     user re-sync from the already-registered URL on demand at any later time.
 
 3. **Unreliable updates**
    - Diagnose and fix updates that sometimes or often hang.
