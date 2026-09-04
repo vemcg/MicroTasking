@@ -27,3 +27,8 @@ Next work session: make onboarding, import, persistence, versioning, and update 
    - Make failures visible with actionable messages and retry paths.
    - Validate APK URL, release asset existence, signing certificate, version code, and generated QR payload.
    - Add automated checks where practical and document the manual device checklist.
+
+5. **Tasking logic**
+   - Remove the rapid-test capability. Prompts per day has no fixed upper limit (0 or more; the logic enforces it, not a hardcoded max like 6 or 300), and new tasks are added one at a time every couple of minutes instead of generating the full pool at once.
+   - Replace the "tasks completed this session" count with a streak: consecutive tasks completed successfully, not abandoned or timed out.
+   - Active window is start hour to end hour, both 0-24. At the end of the window, time out anything still sitting in the queue and reset the streak to 0 if anything was timed out. Start hour 0 and end hour 24 together mean the window never ends, so nothing is ever timed out.

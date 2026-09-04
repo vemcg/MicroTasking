@@ -46,6 +46,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -343,6 +344,7 @@ fun MicroTaskingApp(
             onOpenTaskPool = { showingTaskPool = true },
             onOpenQrScanner = { showingQrScanner = true },
             onSyncSheet = { url -> runSheetImport(url) },
+            onCancel = { if (setupComplete) showingSettings = false },
             onSave = { categories, start, end, prompts, rapidMode, queueSize, sheetUrl ->
                 savedCategories = categories
                 savedStartHour = start
@@ -618,6 +620,7 @@ fun SettingsScreen(
     onOpenTaskPool: () -> Unit,
     onOpenQrScanner: () -> Unit,
     onSyncSheet: (String) -> Unit,
+    onCancel: () -> Unit,
     onSave: (Set<String>, String, String, String, Boolean, Int, String) -> Unit
 ) {
     var selectedCategories by remember { mutableStateOf(initialCategories) }
@@ -764,25 +767,30 @@ fun SettingsScreen(
                             )
                             OutlinedTextField(
                                 value = startHour,
-                                onValueChange = { startHour = it },
+                                onValueChange = { startHour = it.filter(Char::isDigit).take(2) },
                                 modifier = Modifier.fillMaxWidth(),
-                                label = { Text("Start hour (0-23)") },
+                                label = { Text("Start hour (0-24)") },
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
                                 keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Down) })
                             )
                             OutlinedTextField(
                                 value = endHour,
-                                onValueChange = { endHour = it },
+                                onValueChange = { endHour = it.filter(Char::isDigit).take(2) },
                                 modifier = Modifier.fillMaxWidth(),
-                                label = { Text("End hour (0-23)") },
+                                label = { Text("End hour (0-24)") },
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
                                 keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Down) })
                             )
+                            Text(
+                                "Start 0 and end 24 means the active window never ends, so tasks are never timed out.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                             OutlinedTextField(
                                 value = promptsPerDay,
-                                onValueChange = { promptsPerDay = it },
+                                onValueChange = { promptsPerDay = it.filter(Char::isDigit) },
                                 modifier = Modifier.fillMaxWidth(),
-                                label = { Text("Prompts per day") },
+                                label = { Text("Prompts per day (0 or more, no upper limit)") },
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
                                 keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Down) })
                             )
@@ -867,25 +875,33 @@ fun SettingsScreen(
             }
         }
         Surface(shadowElevation = 4.dp) {
-            Button(
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(16.dp)
                     .navigationBarsPadding(),
-                enabled = selectedCategories.isNotEmpty() || availableCategories.isEmpty(),
-                onClick = {
-                    onSave(
-                        selectedCategories,
-                        startHour,
-                        endHour,
-                        promptsPerDay,
-                        rapidTestMode,
-                        maxQueueSize.toIntOrNull()?.coerceAtLeast(1) ?: 3,
-                        sheetUrl
-                    )
-                }
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text("Save Settings")
+                OutlinedButton(modifier = Modifier.weight(1f), onClick = onCancel) {
+                    Text("Cancel")
+                }
+                Button(
+                    modifier = Modifier.weight(1f),
+                    enabled = selectedCategories.isNotEmpty() || availableCategories.isEmpty(),
+                    onClick = {
+                        onSave(
+                            selectedCategories,
+                            (startHour.toIntOrNull() ?: 0).coerceIn(0, 24).toString(),
+                            (endHour.toIntOrNull() ?: 24).coerceIn(0, 24).toString(),
+                            (promptsPerDay.toIntOrNull() ?: 0).coerceAtLeast(0).toString(),
+                            rapidTestMode,
+                            maxQueueSize.toIntOrNull()?.coerceAtLeast(1) ?: 3,
+                            sheetUrl
+                        )
+                    }
+                ) {
+                    Text("Save Settings")
+                }
             }
         }
     }
