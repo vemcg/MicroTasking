@@ -1,6 +1,7 @@
 package com.microtasking.app
 
 import android.content.Context
+import android.content.SharedPreferences
 import org.json.JSONArray
 import org.json.JSONObject
 import java.time.LocalDateTime
@@ -114,86 +115,120 @@ object TaskDelivery {
         return if (deliveryDelay == null) closeDelay else minOf(deliveryDelay, closeDelay)
     }
 
+    private class ReconciledState(
+        var queue: List<TaskStackEntry>,
+        var streak: Int,
+        val longestStreak: Int,
+        var deliveredInWindow: Int,
+        var countEpochDay: Long,
+        var windowStartEpoch: Long,
+        var backgroundPromptsEnabled: Boolean
+    ) {
+        fun persist(prefs: SharedPreferences) {
+            prefs.edit()
+                .putString("task_queue", writeTaskQueue(queue))
+                .putInt("streak", streak)
+                .putInt("longest_streak", maxOf(longestStreak, streak))
+                .putInt("prompts_delivered_in_window", deliveredInWindow)
+                .putLong("prompts_count_epoch_day", countEpochDay)
+                .putLong("prompts_window_start_epoch", windowStartEpoch)
+                .putBoolean("background_prompts_enabled", backgroundPromptsEnabled)
+                .apply()
+        }
+    }
+
     /**
-     * Runs one tick against persisted state. Three independent things can happen here, matched to
-     * wall-clock reality rather than to each other:
+     * Reconciles persisted state against wall-clock reality. Three independent things can happen
+     * here, matched to reality rather than to each other:
      *  - Outside the active window: anything still actionable in the queue is abandoned (scored
      *    the same as a manual Abandon) and the streak resets. This is what "the window closed"
      *    means for the queue - by the time the window opens again there should be nothing left.
      *  - The calendar day has changed since the delivery count was last reset: the daily count
-     *    resets to 0. Tied to midnight, not to window open/close - an overnight window is still
-     *    "open" straight through midnight, and a manual pause spanning a midnight shouldn't need
-     *    the window to cycle before the count is right again; it's just checked on whatever tick
-     *    happens to run first once the day has actually turned over (which, manually, means the
-     *    first resume after midnight).
+     *    resets to 0, and so does the streak - a streak is a daily thing, and rolling into a new
+     *    day always starts it fresh even if nothing was technically abandoned (e.g. an
+     *    always-active window, which never "closes" and so never hits the abandon-driven reset
+     *    above on its own). Tied to midnight, not to window open/close, so a manual pause
+     *    spanning a midnight still gets this right without needing the window to cycle first.
      *  - A new window occurrence beginning: only clears a pause (a pause only lasts for the
      *    window it was pressed in). Nothing else - if the queue somehow isn't empty at this point
      *    (it should always be empty, since close already cleared it), open leaves it alone and
      *    simply builds on top of it rather than abandoning/scoring it a second time.
-     * Only when inside the window does it then either add a task to the queue or - if paused -
-     * just consume the delivery slot silently, so a long pause can't cram a burst of catch-up
-     * deliveries in when it ends. Returns true if a task was actually added (the caller decides
-     * whether to notify from that).
+     */
+    private fun reconcileState(prefs: SharedPreferences, settings: Settings, now: LocalDateTime): ReconciledState {
+        val state = ReconciledState(
+            queue = readTaskQueue(prefs.getString("task_queue", "[]") ?: "[]"),
+            streak = prefs.getInt("streak", 0),
+            longestStreak = prefs.getInt("longest_streak", 0),
+            deliveredInWindow = prefs.getInt("prompts_delivered_in_window", 0),
+            countEpochDay = prefs.getLong("prompts_count_epoch_day", -1L),
+            windowStartEpoch = prefs.getLong("prompts_window_start_epoch", 0L),
+            backgroundPromptsEnabled = prefs.getBoolean("background_prompts_enabled", true)
+        )
+
+        if (!isWithinActiveWindow(now, settings.startHour, settings.endHour) && state.queue.any { it.isActionable() }) {
+            state.queue = state.queue.map { if (it.isActionable()) it.abandon() else it }
+            state.streak = 0
+        }
+
+        val today = now.toLocalDate().toEpochDay()
+        if (today != state.countEpochDay) {
+            state.deliveredInWindow = 0
+            state.countEpochDay = today
+            state.streak = 0
+        }
+
+        val newWindowStart = currentWindowStart(now, settings.startHour, settings.endHour).toEpochMillis()
+        if (newWindowStart != state.windowStartEpoch) {
+            state.windowStartEpoch = newWindowStart
+            state.backgroundPromptsEnabled = true
+        }
+
+        return state
+    }
+
+    /**
+     * Reconciles day/window rollovers against persisted state without attempting a delivery.
+     * Call this at app launch, before reading persisted streak/queue into UI state - otherwise a
+     * day or window boundary crossed while the app was closed wouldn't show up until whatever
+     * happens to run the first delivery tick, which could be a long wait.
+     */
+    fun reconcile(context: Context) {
+        val settings = loadSettings(context) ?: return
+        val prefs = prefs(context)
+        reconcileState(prefs, settings, LocalDateTime.now()).persist(prefs)
+    }
+
+    /**
+     * Runs one delivery slot: reconciles state (see [reconcileState]), then - only when inside
+     * the window - either adds a task to the queue or, if paused, just consumes the delivery slot
+     * silently, so a long pause can't cram a burst of catch-up deliveries in when it ends. Returns
+     * true if a task was actually added (the caller decides whether to notify from that).
      */
     fun deliverOrConsumeSlot(context: Context): Boolean {
         val settings = loadSettings(context) ?: return false
         val prefs = prefs(context)
         val now = LocalDateTime.now()
-
-        var queue = readTaskQueue(prefs.getString("task_queue", "[]") ?: "[]")
-        var streak = prefs.getInt("streak", 0)
-        val longestStreak = prefs.getInt("longest_streak", 0)
-        var deliveredInWindow = prefs.getInt("prompts_delivered_in_window", 0)
-        var countEpochDay = prefs.getLong("prompts_count_epoch_day", -1L)
-        var windowStartEpoch = prefs.getLong("prompts_window_start_epoch", 0L)
-        var backgroundPromptsEnabled = prefs.getBoolean("background_prompts_enabled", true)
-
-        val withinWindow = isWithinActiveWindow(now, settings.startHour, settings.endHour)
-        if (!withinWindow && queue.any { it.isActionable() }) {
-            queue = queue.map { if (it.isActionable()) it.abandon() else it }
-            streak = 0
-        }
-
-        val today = now.toLocalDate().toEpochDay()
-        if (today != countEpochDay) {
-            deliveredInWindow = 0
-            countEpochDay = today
-        }
-
-        val newWindowStart = currentWindowStart(now, settings.startHour, settings.endHour).toEpochMillis()
-        if (newWindowStart != windowStartEpoch) {
-            windowStartEpoch = newWindowStart
-            backgroundPromptsEnabled = true
-        }
+        val state = reconcileState(prefs, settings, now)
 
         var taskAdded = false
-        if (withinWindow) {
-            if (backgroundPromptsEnabled) {
-                val activeTasks = queue.filter { it.isActionable() }
+        if (isWithinActiveWindow(now, settings.startHour, settings.endHour)) {
+            if (state.backgroundPromptsEnabled) {
+                val activeTasks = state.queue.filter { it.isActionable() }
                 if (activeTasks.size >= settings.maxQueueSize) {
-                    streak = 0
+                    state.streak = 0
                 }
                 val nextTask = chooseWeightedTask(
                     tasks = settings.promptTasks,
                     activeCategoryOrder = settings.activeCategoryOrder,
                     previousTaskId = activeTasks.lastOrNull()?.task?.id
                 )
-                queue = activeTasks.takeLast((settings.maxQueueSize - 1).coerceAtLeast(0)) + TaskStackEntry(nextTask)
+                state.queue = activeTasks.takeLast((settings.maxQueueSize - 1).coerceAtLeast(0)) + TaskStackEntry(nextTask)
                 taskAdded = true
             }
-            deliveredInWindow++
+            state.deliveredInWindow++
         }
 
-        prefs.edit()
-            .putString("task_queue", writeTaskQueue(queue))
-            .putInt("streak", streak)
-            .putInt("longest_streak", maxOf(longestStreak, streak))
-            .putInt("prompts_delivered_in_window", deliveredInWindow)
-            .putLong("prompts_count_epoch_day", countEpochDay)
-            .putLong("prompts_window_start_epoch", windowStartEpoch)
-            .putBoolean("background_prompts_enabled", backgroundPromptsEnabled)
-            .apply()
-
+        state.persist(prefs)
         return taskAdded
     }
 }

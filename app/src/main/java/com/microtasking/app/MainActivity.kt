@@ -99,6 +99,10 @@ class MainActivity : ComponentActivity() {
             // in effect before the app was last closed - pausing only lasts for the current
             // running session, not across a full restart.
             preferences.edit().putBoolean("background_prompts_enabled", true).apply()
+            // Catches up on any day/window rollover that happened while the app was closed,
+            // before the streak/queue below get read into UI state - otherwise a stale streak
+            // could show until whichever delivery tick happens to run first.
+            TaskDelivery.reconcile(this)
         }
         setContent {
             MaterialTheme(colorScheme = microTaskingColorScheme) {
