@@ -44,12 +44,21 @@ fun millisUntilWindowCloses(now: LocalDateTime, startHour: Int, endHour: Int): L
 }
 
 /**
+ * TESTING ONLY: shrinks several real-time-tied behaviors down to a scale a developer can actually
+ * sit and watch - the queue-delivery floor drops to 5 seconds instead of 30, and the "this
+ * week"/"this month" score-screen windows drop to minutes instead of days (see below). Flip back
+ * to false before shipping a real release build.
+ */
+const val RAPID_TESTING_MODE = true
+
+/**
  * Floor on the delay nextPromptDelayMillis can return. Without this, opening the app very late
  * in the active window with many prompts still due makes remainingWindowMillis / remainingPrompts
  * round down toward zero, which used to fire a rapid-fire burst of deliveries (each one doing
  * disk I/O and posting a notification) tight enough to ANR the app.
  */
-private const val MIN_DELAY_MILLIS = 30_000L
+private val MIN_DELAY_MILLIS: Long
+    get() = if (RAPID_TESTING_MODE) 5_000L else 30_000L
 
 /**
  * Delay in millis until the next task should be added to the queue, or null if nothing more
@@ -81,17 +90,11 @@ fun nextPromptDelayMillis(
 
 fun LocalDateTime.toEpochMillis(): Long = atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
 
-/**
- * TESTING ONLY: shrinks the "this week"/"this month" score-screen windows down to minutes so the
- * per-period longest-streak buckets can be exercised in a few minutes instead of actually waiting
- * days. Flip back to false before shipping a real release build.
- */
-const val TESTING_FAST_SCORE_WINDOWS = true
 private const val TEST_WEEK_WINDOW_MILLIS = 7 * 60_000L
 
 /** How far back "this week" on the score screen looks - 7 real days, or 7 test minutes. */
 fun weekScoreWindowMillis(): Long =
-    if (TESTING_FAST_SCORE_WINDOWS) TEST_WEEK_WINDOW_MILLIS else Duration.ofDays(7).toMillis()
+    if (RAPID_TESTING_MODE) TEST_WEEK_WINDOW_MILLIS else Duration.ofDays(7).toMillis()
 
 /**
  * How far back "this month" on the score screen looks - as many real days as [now]'s calendar
@@ -101,5 +104,5 @@ fun weekScoreWindowMillis(): Long =
  */
 fun monthScoreWindowMillis(now: LocalDateTime): Long {
     val monthLengthInDays = now.toLocalDate().lengthOfMonth().toLong()
-    return if (TESTING_FAST_SCORE_WINDOWS) monthLengthInDays * 60_000L else Duration.ofDays(monthLengthInDays).toMillis()
+    return if (RAPID_TESTING_MODE) monthLengthInDays * 60_000L else Duration.ofDays(monthLengthInDays).toMillis()
 }

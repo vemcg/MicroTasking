@@ -301,7 +301,7 @@ fun MicroTaskingApp(
 
     // 45 days comfortably covers the longest real (non-test) score window - a month never has
     // more than 31 days - with margin, so this never trims something a real "this month" query
-    // still needs, regardless of TESTING_FAST_SCORE_WINDOWS.
+    // still needs, regardless of RAPID_TESTING_MODE.
     fun persistCompletionLog(newLog: List<CompletionRecord>) {
         val cutoff = System.currentTimeMillis() - 45L * 24 * 60 * 60 * 1000
         val trimmed = newLog.filter { it.epochMs >= cutoff }
