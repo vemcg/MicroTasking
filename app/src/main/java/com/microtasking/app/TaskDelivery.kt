@@ -104,8 +104,7 @@ object TaskDelivery {
         if (!isWithinActiveWindow(now, settings.startHour, settings.endHour)) {
             return millisUntilWindowOpens(now, settings.startHour, settings.endHour)
         }
-        val windowStart = currentWindowStart(now, settings.startHour, settings.endHour).toEpochMillis()
-        val deliveredInWindow = if (windowStart == prefs.getLong("prompts_window_start_epoch", 0L)) {
+        val deliveredInWindow = if (now.toLocalDate().toEpochDay() == prefs.getLong("prompts_count_epoch_day", -1L)) {
             prefs.getInt("prompts_delivered_in_window", 0)
         } else {
             0
@@ -116,15 +115,21 @@ object TaskDelivery {
     }
 
     /**
-     * Runs one tick against persisted state. Two independent things can happen here, matched to
+     * Runs one tick against persisted state. Three independent things can happen here, matched to
      * wall-clock reality rather than to each other:
      *  - Outside the active window: anything still actionable in the queue is abandoned (scored
      *    the same as a manual Abandon) and the streak resets. This is what "the window closed"
      *    means for the queue - by the time the window opens again there should be nothing left.
-     *  - A new window occurrence beginning: resets the daily delivery count and clears a pause
-     *    (a pause only lasts for the window it was pressed in). Nothing else - if the queue
-     *    somehow isn't empty at this point, it's left alone and simply built on top of, never
-     *    abandoned or scored here.
+     *  - The calendar day has changed since the delivery count was last reset: the daily count
+     *    resets to 0. Tied to midnight, not to window open/close - an overnight window is still
+     *    "open" straight through midnight, and a manual pause spanning a midnight shouldn't need
+     *    the window to cycle before the count is right again; it's just checked on whatever tick
+     *    happens to run first once the day has actually turned over (which, manually, means the
+     *    first resume after midnight).
+     *  - A new window occurrence beginning: only clears a pause (a pause only lasts for the
+     *    window it was pressed in). Nothing else - if the queue somehow isn't empty at this point
+     *    (it should always be empty, since close already cleared it), open leaves it alone and
+     *    simply builds on top of it rather than abandoning/scoring it a second time.
      * Only when inside the window does it then either add a task to the queue or - if paused -
      * just consume the delivery slot silently, so a long pause can't cram a burst of catch-up
      * deliveries in when it ends. Returns true if a task was actually added (the caller decides
@@ -139,6 +144,7 @@ object TaskDelivery {
         var streak = prefs.getInt("streak", 0)
         val longestStreak = prefs.getInt("longest_streak", 0)
         var deliveredInWindow = prefs.getInt("prompts_delivered_in_window", 0)
+        var countEpochDay = prefs.getLong("prompts_count_epoch_day", -1L)
         var windowStartEpoch = prefs.getLong("prompts_window_start_epoch", 0L)
         var backgroundPromptsEnabled = prefs.getBoolean("background_prompts_enabled", true)
 
@@ -148,10 +154,15 @@ object TaskDelivery {
             streak = 0
         }
 
+        val today = now.toLocalDate().toEpochDay()
+        if (today != countEpochDay) {
+            deliveredInWindow = 0
+            countEpochDay = today
+        }
+
         val newWindowStart = currentWindowStart(now, settings.startHour, settings.endHour).toEpochMillis()
         if (newWindowStart != windowStartEpoch) {
             windowStartEpoch = newWindowStart
-            deliveredInWindow = 0
             backgroundPromptsEnabled = true
         }
 
@@ -178,6 +189,7 @@ object TaskDelivery {
             .putInt("streak", streak)
             .putInt("longest_streak", maxOf(longestStreak, streak))
             .putInt("prompts_delivered_in_window", deliveredInWindow)
+            .putLong("prompts_count_epoch_day", countEpochDay)
             .putLong("prompts_window_start_epoch", windowStartEpoch)
             .putBoolean("background_prompts_enabled", backgroundPromptsEnabled)
             .apply()
