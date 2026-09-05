@@ -301,7 +301,7 @@ fun MicroTaskingApp(
 
     // 45 days comfortably covers the longest real (non-test) score window - a month never has
     // more than 31 days - with margin, so this never trims something a real "this month" query
-    // still needs, regardless of RAPID_TESTING_MODE.
+    // still needs, regardless of whether rapid testing mode is currently active.
     fun persistCompletionLog(newLog: List<CompletionRecord>) {
         val cutoff = System.currentTimeMillis() - 45L * 24 * 60 * 60 * 1000
         val trimmed = newLog.filter { it.epochMs >= cutoff }
@@ -438,6 +438,7 @@ fun MicroTaskingApp(
             streak = streak,
             longestStreak = longestStreak,
             completionLog = completionLog,
+            promptsPerDay = savedPromptsPerDay.toIntOrNull() ?: 0,
             outcome = lastOutcome,
             timeoutStreak = timeoutStreak,
             entryToken = scoreEntryToken,
@@ -611,6 +612,7 @@ fun ScoreScreen(
     streak: Int,
     longestStreak: Int,
     completionLog: List<CompletionRecord>,
+    promptsPerDay: Int,
     outcome: TaskLifecycleState,
     timeoutStreak: Int,
     entryToken: Int,
@@ -679,8 +681,8 @@ fun ScoreScreen(
             val now = LocalDateTime.now()
             val todaySince = LocalDate.now().atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
             val todayLongest = longestStreakSince(completionLog, todaySince)
-            val weekLongest = longestStreakSince(completionLog, nowMs - weekScoreWindowMillis())
-            val monthLongest = longestStreakSince(completionLog, nowMs - monthScoreWindowMillis(now))
+            val weekLongest = longestStreakSince(completionLog, nowMs - weekScoreWindowMillis(promptsPerDay))
+            val monthLongest = longestStreakSince(completionLog, nowMs - monthScoreWindowMillis(now, promptsPerDay))
             Text(
                 text = "Longest streak",
                 modifier = Modifier.padding(top = 32.dp),

@@ -34,27 +34,36 @@ jobs:
           VERSION_NAME="${VERSION_BASE}-${BUILD_NUMBER}"
           VERSION_CODE=$(date -u +%s)
           BRANCH="${GITHUB_REF_NAME}"
-          # Tag (and therefore the downloaded filename) stays plain "vBASE-N" for every branch -
-          # BUILD_NUMBER comes from github.run_number, which is unique across the whole repo
-          # regardless of branch, so two different branches' releases never collide on tag even
-          # without a branch suffix. The release *title* carries the branch instead (see the
-          # "Create GitHub release" step) - that's what "Find latest main release" below keys off.
-          TAG="v${VERSION_NAME}"
+          # DISPLAY_VERSION always increments per build (BUILD_NUMBER is github.run_number, unique
+          # repo-wide) and is only ever shown to a human - the QR label, the release title, the
+          # download button text. It's independent of TAG/asset_name below.
+          DISPLAY_VERSION="v${VERSION_NAME}"
           if [ "$BRANCH" = "main" ]; then
-            RELEASE_NAME="MicroTasking $TAG"
+            # main releases are permanent version history: a new tag/asset every build, never
+            # deleted.
+            TAG="$DISPLAY_VERSION"
+            ASSET_NAME="MicroTasking-$TAG.apk"
+            RELEASE_NAME="MicroTasking $DISPLAY_VERSION"
           else
+            # Dev branches get ONE floating tag/asset per branch that every build overwrites (see
+            # the "Remove previous dev release" step below), instead of a new versioned release
+            # piling up on every push - the QR code always resolves to exactly one file: whatever
+            # was most recently built from this branch.
             SAFE_BRANCH=$(printf '%s' "$BRANCH" | tr -c 'A-Za-z0-9._-' '-')
-            RELEASE_NAME="MicroTasking $TAG ($SAFE_BRANCH)"
+            TAG="dev-${SAFE_BRANCH}"
+            ASSET_NAME="MicroTasking-dev-${SAFE_BRANCH}.apk"
+            RELEASE_NAME="MicroTasking $DISPLAY_VERSION ($SAFE_BRANCH)"
           fi
           echo "version_base=$VERSION_BASE" >> "$GITHUB_OUTPUT"
           echo "build_number=$BUILD_NUMBER" >> "$GITHUB_OUTPUT"
           echo "build_timestamp=$BUILD_TIMESTAMP" >> "$GITHUB_OUTPUT"
           echo "git_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
           echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          echo "display_version=$DISPLAY_VERSION" >> "$GITHUB_OUTPUT"
           echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "release_name=$RELEASE_NAME" >> "$GITHUB_OUTPUT"
-          echo "asset_name=MicroTasking-$TAG.apk" >> "$GITHUB_OUTPUT"
+          echo "asset_name=$ASSET_NAME" >> "$GITHUB_OUTPUT"
           echo "git_branch=$BRANCH" >> "$GITHUB_OUTPUT"
 
       - name: Build debug APK
@@ -72,6 +81,16 @@ jobs:
           mkdir -p dist
           cp app/build/outputs/apk/debug/app-debug.apk "dist/${{ steps.version.outputs.asset_name }}"
 
+      - name: Remove previous dev release for this branch
+        # Dev branches reuse the same tag/asset every build (see "Determine timestamped
+        # version/tag") - delete whatever that tag pointed to last time so the release is fully
+        # replaced rather than accumulating assets, and never on the first-ever build of a branch.
+        if: steps.version.outputs.git_branch != 'main'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release delete "${{ steps.version.outputs.tag }}" --yes --cleanup-tag
+
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
@@ -86,13 +105,12 @@ jobs:
         run: |
           MAIN_TAG=""
           if [ "${{ steps.version.outputs.git_branch }}" != "main" ]; then
-            # Tags are always the plain "vBASE-N" shape now (see "Determine timestamped
-            # version/tag"), so main-vs-branch can't be told apart by tag anymore - the release
-            # *title* carries that instead ("MicroTasking vBASE-N" for main, with a "(branch)"
-            # suffix for everything else). publishedAt, not createdAt: createdAt tracks the
-            # tagged commit's date, which several releases built from the same commit window
-            # share - it can't tell them apart. publishedAt is the actual release-publish
-            # moment, always distinct.
+            # Dev branches now use a fixed "dev-<branch>" tag (see "Determine timestamped
+            # version/tag"), so this can't just look for "the other tag shape" - it still keys off
+            # the release *title* ("MicroTasking vBASE-N" for main, with a "(branch)" suffix for
+            # everything else). publishedAt, not createdAt: createdAt tracks the tagged commit's
+            # date, which several releases built from the same commit window share - it can't tell
+            # them apart. publishedAt is the actual release-publish moment, always distinct.
             MAIN_TAG=$(gh release list --limit 50 --json tagName,name,publishedAt \
               | jq -r '[.[] | select(.name | test("^MicroTasking v[0-9]+\\.[0-9]+\\.[0-9]+-[0-9]+$"))] | sort_by(.publishedAt) | last | .tagName // empty')
           fi
@@ -110,7 +128,7 @@ jobs:
         run: |
           python scripts/generate_install_page.py \
             --url "https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.tag }}/${{ steps.version.outputs.asset_name }}" \
-            --version "${{ steps.version.outputs.tag }}" \
+            --version "${{ steps.version.outputs.display_version }}" \
             --branch "${{ steps.version.outputs.git_branch }}" \
             --main-url "${{ steps.mainrelease.outputs.main_url }}" \
             --main-version "${{ steps.mainrelease.outputs.main_tag }}" \

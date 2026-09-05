@@ -44,12 +44,15 @@ fun millisUntilWindowCloses(now: LocalDateTime, startHour: Int, endHour: Int): L
 }
 
 /**
- * TESTING ONLY: shrinks several real-time-tied behaviors down to a scale a developer can actually
- * sit and watch - the queue-delivery floor drops to 5 seconds instead of 30, and the "this
- * week"/"this month" score-screen windows drop to minutes instead of days (see below). Flip back
- * to false before shipping a real release build.
+ * Threshold on "prompts per day" above which the app treats itself as being deliberately
+ * stress-tested rather than used normally - no rebuild needed, just dial the Settings "prompts per
+ * day" field above/below this in the running app. Above it: the queue-delivery floor drops to 5
+ * seconds instead of 30, and the "this week"/"this month" score-screen windows drop to minutes
+ * instead of days (see below), so a developer can actually sit and watch the pacing/bucketing.
  */
-const val RAPID_TESTING_MODE = true
+private const val RAPID_TESTING_THRESHOLD = 1000
+
+fun isRapidTestingMode(promptsPerDay: Int): Boolean = promptsPerDay >= RAPID_TESTING_THRESHOLD
 
 /**
  * Floor on the delay nextPromptDelayMillis can return. Without this, opening the app very late
@@ -57,8 +60,7 @@ const val RAPID_TESTING_MODE = true
  * round down toward zero, which used to fire a rapid-fire burst of deliveries (each one doing
  * disk I/O and posting a notification) tight enough to ANR the app.
  */
-private val MIN_DELAY_MILLIS: Long
-    get() = if (RAPID_TESTING_MODE) 5_000L else 30_000L
+private fun minDelayMillis(promptsPerDay: Int): Long = if (isRapidTestingMode(promptsPerDay)) 5_000L else 30_000L
 
 /**
  * Delay in millis until the next task should be added to the queue, or null if nothing more
@@ -81,9 +83,10 @@ fun nextPromptDelayMillis(
     val remainingPrompts = promptsPerDay - promptsDeliveredInWindow
     val remainingWindowMillis = millisUntilWindowCloses(now, startHour, endHour)
         ?: Duration.ofHours(24).toMillis()
-    if (remainingWindowMillis < MIN_DELAY_MILLIS) return null
-    val averageInterval = (remainingWindowMillis / remainingPrompts).coerceAtLeast(MIN_DELAY_MILLIS)
-    val low = (averageInterval / 2).coerceAtLeast(MIN_DELAY_MILLIS)
+    val minDelay = minDelayMillis(promptsPerDay)
+    if (remainingWindowMillis < minDelay) return null
+    val averageInterval = (remainingWindowMillis / remainingPrompts).coerceAtLeast(minDelay)
+    val low = (averageInterval / 2).coerceAtLeast(minDelay)
     val high = (averageInterval + averageInterval / 2).coerceAtLeast(low + 1L)
     return (low + random.nextLong(high - low)).coerceAtMost(remainingWindowMillis)
 }
@@ -93,8 +96,8 @@ fun LocalDateTime.toEpochMillis(): Long = atZone(ZoneId.systemDefault()).toInsta
 private const val TEST_WEEK_WINDOW_MILLIS = 7 * 60_000L
 
 /** How far back "this week" on the score screen looks - 7 real days, or 7 test minutes. */
-fun weekScoreWindowMillis(): Long =
-    if (RAPID_TESTING_MODE) TEST_WEEK_WINDOW_MILLIS else Duration.ofDays(7).toMillis()
+fun weekScoreWindowMillis(promptsPerDay: Int): Long =
+    if (isRapidTestingMode(promptsPerDay)) TEST_WEEK_WINDOW_MILLIS else Duration.ofDays(7).toMillis()
 
 /**
  * How far back "this month" on the score screen looks - as many real days as [now]'s calendar
@@ -102,7 +105,7 @@ fun weekScoreWindowMillis(): Long =
  * looks back 31 test minutes, not a flat 30) - the unit shrinks from days to minutes, but the
  * count stays tied to the real length of the current month either way.
  */
-fun monthScoreWindowMillis(now: LocalDateTime): Long {
+fun monthScoreWindowMillis(now: LocalDateTime, promptsPerDay: Int): Long {
     val monthLengthInDays = now.toLocalDate().lengthOfMonth().toLong()
-    return if (RAPID_TESTING_MODE) monthLengthInDays * 60_000L else Duration.ofDays(monthLengthInDays).toMillis()
+    return if (isRapidTestingMode(promptsPerDay)) monthLengthInDays * 60_000L else Duration.ofDays(monthLengthInDays).toMillis()
 }
