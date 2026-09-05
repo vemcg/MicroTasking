@@ -121,6 +121,7 @@ object TaskDelivery {
         val longestStreak = prefs.getInt("longest_streak", 0)
         var deliveredInWindow = prefs.getInt("prompts_delivered_in_window", 0)
         var windowStartEpoch = prefs.getLong("prompts_window_start_epoch", 0L)
+        var backgroundPromptsEnabled = prefs.getBoolean("background_prompts_enabled", true)
 
         val newWindowStart = currentWindowStart(now, settings.startHour, settings.endHour).toEpochMillis()
         if (newWindowStart != windowStartEpoch) {
@@ -132,10 +133,13 @@ object TaskDelivery {
             }
             windowStartEpoch = newWindowStart
             deliveredInWindow = 0
+            // A pause only lasts for the window it was pressed in - the next window starting
+            // fresh is the one and only other thing that un-pauses it (see also: a cold launch).
+            backgroundPromptsEnabled = true
         }
 
         var taskAdded = false
-        if (prefs.getBoolean("background_prompts_enabled", true)) {
+        if (backgroundPromptsEnabled) {
             val activeTasks = queue.filter { it.isActionable() }
             if (activeTasks.size >= settings.maxQueueSize) {
                 streak = 0
@@ -156,6 +160,7 @@ object TaskDelivery {
             .putInt("longest_streak", maxOf(longestStreak, streak))
             .putInt("prompts_delivered_in_window", deliveredInWindow)
             .putLong("prompts_window_start_epoch", windowStartEpoch)
+            .putBoolean("background_prompts_enabled", backgroundPromptsEnabled)
             .apply()
 
         return taskAdded

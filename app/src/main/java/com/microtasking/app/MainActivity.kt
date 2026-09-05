@@ -320,6 +320,9 @@ fun MicroTaskingApp(
             taskQueue = readTaskQueue(prefs.getString("task_queue", "[]") ?: "[]")
             streak = prefs.getInt("streak", 0)
             longestStreak = prefs.getInt("longest_streak", 0)
+            // A new window starting auto-clears a pause, which happens inside deliverOrConsumeSlot -
+            // pick that up here so the Pause/Resume button doesn't show stale state.
+            backgroundPromptsRunning = prefs.getBoolean("background_prompts_enabled", true)
             if (added) {
                 showingScore = false
             }
