@@ -34,14 +34,17 @@ jobs:
           VERSION_NAME="${VERSION_BASE}-${BUILD_NUMBER}"
           VERSION_CODE=$(date -u +%s)
           BRANCH="${GITHUB_REF_NAME}"
-          # Main keeps the plain "vBASE-N" tag so it stays the pattern "Find latest main
-          # release" below matches; every other branch gets its name appended so its releases
-          # never collide with main's and can be told apart at a glance.
+          # Tag (and therefore the downloaded filename) stays plain "vBASE-N" for every branch -
+          # BUILD_NUMBER comes from github.run_number, which is unique across the whole repo
+          # regardless of branch, so two different branches' releases never collide on tag even
+          # without a branch suffix. The release *title* carries the branch instead (see the
+          # "Create GitHub release" step) - that's what "Find latest main release" below keys off.
+          TAG="v${VERSION_NAME}"
           if [ "$BRANCH" = "main" ]; then
-            TAG="v${VERSION_NAME}"
+            RELEASE_NAME="MicroTasking $TAG"
           else
             SAFE_BRANCH=$(printf '%s' "$BRANCH" | tr -c 'A-Za-z0-9._-' '-')
-            TAG="v${VERSION_NAME}-${SAFE_BRANCH}"
+            RELEASE_NAME="MicroTasking $TAG ($SAFE_BRANCH)"
           fi
           echo "version_base=$VERSION_BASE" >> "$GITHUB_OUTPUT"
           echo "build_number=$BUILD_NUMBER" >> "$GITHUB_OUTPUT"
@@ -50,6 +53,7 @@ jobs:
           echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
           echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "release_name=$RELEASE_NAME" >> "$GITHUB_OUTPUT"
           echo "asset_name=MicroTasking-$TAG.apk" >> "$GITHUB_OUTPUT"
           echo "git_branch=$BRANCH" >> "$GITHUB_OUTPUT"
 
@@ -72,7 +76,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
-          name: "MicroTasking ${{ steps.version.outputs.tag }}"
+          name: ${{ steps.version.outputs.release_name }}
           files: dist/${{ steps.version.outputs.asset_name }}
 
       - name: Find latest main release
@@ -82,11 +86,15 @@ jobs:
         run: |
           MAIN_TAG=""
           if [ "${{ steps.version.outputs.git_branch }}" != "main" ]; then
-            # publishedAt, not createdAt: createdAt tracks the tagged commit's date, which
-            # several releases built from the same commit window share - it can't tell them
-            # apart. publishedAt is the actual release-publish moment, always distinct.
-            MAIN_TAG=$(gh release list --limit 50 --json tagName,publishedAt \
-              | jq -r '[.[] | select(.tagName | test("^v[0-9]+\\.[0-9]+\\.[0-9]+-[0-9]+$"))] | sort_by(.publishedAt) | last | .tagName // empty')
+            # Tags are always the plain "vBASE-N" shape now (see "Determine timestamped
+            # version/tag"), so main-vs-branch can't be told apart by tag anymore - the release
+            # *title* carries that instead ("MicroTasking vBASE-N" for main, with a "(branch)"
+            # suffix for everything else). publishedAt, not createdAt: createdAt tracks the
+            # tagged commit's date, which several releases built from the same commit window
+            # share - it can't tell them apart. publishedAt is the actual release-publish
+            # moment, always distinct.
+            MAIN_TAG=$(gh release list --limit 50 --json tagName,name,publishedAt \
+              | jq -r '[.[] | select(.name | test("^MicroTasking v[0-9]+\\.[0-9]+\\.[0-9]+-[0-9]+$"))] | sort_by(.publishedAt) | last | .tagName // empty')
           fi
           echo "main_tag=$MAIN_TAG" >> "$GITHUB_OUTPUT"
           if [ -n "$MAIN_TAG" ]; then
