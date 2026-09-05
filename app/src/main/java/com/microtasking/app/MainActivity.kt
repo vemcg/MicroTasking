@@ -366,11 +366,16 @@ fun MicroTaskingApp(
             initialSheetUrl = savedSheetUrl,
             isImportingSheet = isImportingSheet,
             importMessage = sheetImportMessage,
+            backgroundPromptsRunning = backgroundPromptsRunning,
             onOpenMyTasks = { showingMyTasks = true },
             onOpenTaskPool = { showingTaskPool = true },
             onOpenQrScanner = { showingQrScanner = true },
             onSyncSheet = { url -> runSheetImport(url) },
             onCancel = { if (setupComplete) showingSettings = false },
+            onBackgroundPromptsChanged = { enabled ->
+                backgroundPromptsRunning = enabled
+                onBackgroundPromptsChanged(enabled)
+            },
             onSave = { categories, start, end, prompts, queueSize, sheetUrl ->
                 savedCategories = categories
                 savedStartHour = start
@@ -484,6 +489,15 @@ fun TaskPromptScreen(
             }
         )
 
+        Button(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp, vertical = 12.dp),
+            onClick = { onBackgroundPromptsChanged(!backgroundPromptsRunning) }
+        ) {
+            Text(if (backgroundPromptsRunning) "Pause task queue" else "Resume task queue")
+        }
+
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
@@ -495,15 +509,6 @@ fun TaskPromptScreen(
                     "Task queue: ${taskEntries.size} active of $maxQueueSize",
                     style = MaterialTheme.typography.labelLarge
                 )
-            }
-
-            item {
-                Button(
-                    modifier = Modifier.fillMaxWidth(),
-                    onClick = { onBackgroundPromptsChanged(!backgroundPromptsRunning) }
-                ) {
-                    Text(if (backgroundPromptsRunning) "Pause task queue" else "Resume task queue")
-                }
             }
 
             items(taskEntries, key = { it.task.id }) { entry ->
@@ -583,6 +588,14 @@ fun ScoreScreen(
                 }
             }
         )
+        Button(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp, vertical = 12.dp),
+            onClick = { onBackgroundPromptsChanged(!backgroundPromptsRunning) }
+        ) {
+            Text(if (backgroundPromptsRunning) "Pause task queue" else "Resume task queue")
+        }
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -619,14 +632,6 @@ fun ScoreScreen(
                     color = MaterialTheme.colorScheme.error
                 )
             }
-            Button(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 24.dp),
-                onClick = { onBackgroundPromptsChanged(!backgroundPromptsRunning) }
-            ) {
-                Text(if (backgroundPromptsRunning) "Pause task queue" else "Resume task queue")
-            }
         }
     }
 }
@@ -642,11 +647,13 @@ fun SettingsScreen(
     initialSheetUrl: String = "",
     isImportingSheet: Boolean = false,
     importMessage: String? = null,
+    backgroundPromptsRunning: Boolean,
     onOpenMyTasks: () -> Unit,
     onOpenTaskPool: () -> Unit,
     onOpenQrScanner: () -> Unit,
     onSyncSheet: (String) -> Unit,
     onCancel: () -> Unit,
+    onBackgroundPromptsChanged: (Boolean) -> Unit,
     onSave: (Set<String>, String, String, String, Int, String) -> Unit
 ) {
     var selectedCategories by remember { mutableStateOf(initialCategories) }
@@ -785,6 +792,12 @@ fun SettingsScreen(
                             scheduleExpanded = !scheduleExpanded
                         }
                         if (scheduleExpanded) {
+                            Button(
+                                modifier = Modifier.fillMaxWidth(),
+                                onClick = { onBackgroundPromptsChanged(!backgroundPromptsRunning) }
+                            ) {
+                                Text(if (backgroundPromptsRunning) "Pause task queue" else "Resume task queue")
+                            }
                             Text(
                                 "Configure your active daily window and prompt frequency.",
                                 style = MaterialTheme.typography.bodySmall,
