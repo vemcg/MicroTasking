@@ -12,17 +12,20 @@ import androidx.core.app.NotificationCompat
 
 class PromptAlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        val preferences = context.getSharedPreferences("microtasking_settings", Context.MODE_PRIVATE)
-        if (!preferences.getBoolean("background_prompts_enabled", true)) return
+        val preferences = TaskDelivery.prefs(context)
         if (preferences.getBoolean("app_in_foreground", false)) {
-            Log.i("MicroTasking", "Suppressing background prompt while app is in foreground")
+            // The foreground pacing loop owns delivery while the app is open; onStart/onStop
+            // keep this alarm cancelled during that time, but reschedule defensively here too
+            // in case one slipped through right at the foreground/background transition.
+            Log.i("MicroTasking", "Skipping delivery while app is foregrounded")
+            PromptScheduler.scheduleNext(context)
             return
         }
         Log.i("MicroTasking", "Background prompt alarm received")
-        PromptNotifier.show(context)
-        if (preferences.getBoolean("background_prompts_enabled", true)) {
-            PromptScheduler.scheduleNext(context)
+        if (TaskDelivery.deliverOrConsumeSlot(context)) {
+            PromptNotifier.show(context)
         }
+        PromptScheduler.scheduleNext(context)
     }
 
     companion object {
@@ -67,12 +70,10 @@ object PromptScheduler {
     private const val REQUEST_CODE = 1002
 
     fun scheduleNext(context: Context) {
-        val preferences = context.getSharedPreferences("microtasking_settings", Context.MODE_PRIVATE)
-        if (preferences.getBoolean("app_in_foreground", false)) {
-            Log.i("MicroTasking", "Skipping schedule while app is foregrounded")
+        val delayMillis = TaskDelivery.computeNextDelayMillis(context) ?: run {
+            Log.i("MicroTasking", "Nothing to schedule (setup incomplete, no eligible tasks, or prompts disabled)")
             return
         }
-        val delayMillis = 15 * 60 * 1_000L
         val intent = Intent(context, PromptAlarmReceiver::class.java)
         val pendingIntent = PendingIntent.getBroadcast(
             context,

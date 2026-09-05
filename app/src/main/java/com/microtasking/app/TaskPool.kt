@@ -28,6 +28,7 @@ data class TaskStackEntry(
     val task: ManagedTask,
     val state: TaskLifecycleState = TaskLifecycleState.READY,
     val startedAtEpochMs: Long? = null,
+    val completedAtEpochMs: Long? = null,
     val deferredUntilEpochMs: Long? = null
 ) {
     fun start(): TaskStackEntry = copy(
@@ -35,7 +36,9 @@ data class TaskStackEntry(
         startedAtEpochMs = startedAtEpochMs ?: System.currentTimeMillis()
     )
 
-    fun complete(): TaskStackEntry = copy(state = TaskLifecycleState.COMPLETED)
+    // completedAtEpochMs isn't read anywhere yet - kept so a future elapsed-time/running-average
+    // feature doesn't need a persisted-data migration to add it.
+    fun complete(): TaskStackEntry = copy(state = TaskLifecycleState.COMPLETED, completedAtEpochMs = System.currentTimeMillis())
 
     fun abandon(): TaskStackEntry = copy(state = TaskLifecycleState.ABANDONED)
 
@@ -89,34 +92,62 @@ fun loadSeedTasks(context: Context): List<ManagedTask> = runCatching {
     }
 }.getOrDefault(builtInTasks)
 
+private fun managedTaskToJson(task: ManagedTask): JSONObject = JSONObject().apply {
+    put("id", task.id)
+    put("description", task.description)
+    put("category", task.category)
+    put("durationMinutes", task.durationMinutes)
+    put("builtIn", task.builtIn)
+    put("enabled", task.enabled)
+    put("temporarilyUnavailable", task.temporarilyUnavailable)
+    put("neverSuggest", task.neverSuggest)
+}
+
+private fun managedTaskFromJson(task: JSONObject): ManagedTask = ManagedTask(
+    id = task.getString("id"),
+    description = task.getString("description"),
+    category = task.getString("category"),
+    durationMinutes = task.getInt("durationMinutes"),
+    builtIn = task.getBoolean("builtIn"),
+    enabled = task.getBoolean("enabled"),
+    temporarilyUnavailable = task.getBoolean("temporarilyUnavailable"),
+    neverSuggest = task.getBoolean("neverSuggest")
+)
+
 fun readManagedTasks(json: String): List<ManagedTask> = runCatching {
     val values = JSONArray(json)
+    List(values.length()) { index -> managedTaskFromJson(values.getJSONObject(index)) }
+}.getOrDefault(emptyList())
+
+fun writeManagedTasks(tasks: List<ManagedTask>): String = JSONArray().apply {
+    tasks.forEach { put(managedTaskToJson(it)) }
+}.toString()
+
+private fun JSONObject.optNullableLong(key: String): Long? =
+    if (has(key) && !isNull(key)) getLong(key) else null
+
+fun readTaskQueue(json: String): List<TaskStackEntry> = runCatching {
+    val values = JSONArray(json)
     List(values.length()) { index ->
-        val task = values.getJSONObject(index)
-        ManagedTask(
-            id = task.getString("id"),
-            description = task.getString("description"),
-            category = task.getString("category"),
-            durationMinutes = task.getInt("durationMinutes"),
-            builtIn = task.getBoolean("builtIn"),
-            enabled = task.getBoolean("enabled"),
-            temporarilyUnavailable = task.getBoolean("temporarilyUnavailable"),
-            neverSuggest = task.getBoolean("neverSuggest")
+        val entry = values.getJSONObject(index)
+        TaskStackEntry(
+            task = managedTaskFromJson(entry.getJSONObject("task")),
+            state = TaskLifecycleState.valueOf(entry.getString("state")),
+            startedAtEpochMs = entry.optNullableLong("startedAtEpochMs"),
+            completedAtEpochMs = entry.optNullableLong("completedAtEpochMs"),
+            deferredUntilEpochMs = entry.optNullableLong("deferredUntilEpochMs")
         )
     }
 }.getOrDefault(emptyList())
 
-fun writeManagedTasks(tasks: List<ManagedTask>): String = JSONArray().apply {
-    tasks.forEach { task ->
+fun writeTaskQueue(queue: List<TaskStackEntry>): String = JSONArray().apply {
+    queue.forEach { entry ->
         put(JSONObject().apply {
-            put("id", task.id)
-            put("description", task.description)
-            put("category", task.category)
-            put("durationMinutes", task.durationMinutes)
-            put("builtIn", task.builtIn)
-            put("enabled", task.enabled)
-            put("temporarilyUnavailable", task.temporarilyUnavailable)
-            put("neverSuggest", task.neverSuggest)
+            put("task", managedTaskToJson(entry.task))
+            put("state", entry.state.name)
+            put("startedAtEpochMs", entry.startedAtEpochMs ?: JSONObject.NULL)
+            put("completedAtEpochMs", entry.completedAtEpochMs ?: JSONObject.NULL)
+            put("deferredUntilEpochMs", entry.deferredUntilEpochMs ?: JSONObject.NULL)
         })
     }
 }.toString()

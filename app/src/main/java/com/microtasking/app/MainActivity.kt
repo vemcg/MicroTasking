@@ -89,15 +89,16 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val preferences = getSharedPreferences("microtasking_settings", MODE_PRIVATE)
         preferences.edit().putBoolean("app_in_foreground", true).apply()
-        PromptScheduler.cancel(this)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), NOTIFICATION_PERMISSION_REQUEST)
         }
         if (preferences.getBoolean("setup_complete", false)) {
+            // A fresh launch always (re)starts delivery, regardless of whatever paused state was
+            // in effect before the app was last closed - pausing only lasts for the current
+            // running session, not across a full restart.
             preferences.edit().putBoolean("background_prompts_enabled", true).apply()
-            PromptScheduler.scheduleNext(this)
         }
         setContent {
             MaterialTheme(colorScheme = microTaskingColorScheme) {
@@ -112,8 +113,6 @@ class MainActivity : ComponentActivity() {
                         endHour = preferences.getString("end_hour", "21") ?: "21",
                         promptsPerDay = preferences.getString("prompts_per_day", "6") ?: "6",
                         maxQueueSize = preferences.getInt("max_task_queue_size", 3),
-                        promptsDeliveredInWindow = preferences.getInt("prompts_delivered_in_window", 0),
-                        promptsWindowStartEpoch = preferences.getLong("prompts_window_start_epoch", 0L),
                         externalSheetUrl = preferences.getString("external_sheet_url", "") ?: "",
                         managedTasks = readManagedTasks(
                             preferences.getString("managed_tasks", "[]") ?: "[]"
@@ -122,6 +121,9 @@ class MainActivity : ComponentActivity() {
                             preferences.getString("task_decline_counts", "{}") ?: "{}"
                         ),
                         userTasks = readUserTasks(preferences.getString("user_tasks", "[]") ?: "[]"),
+                        initialTaskQueue = readTaskQueue(preferences.getString("task_queue", "[]") ?: "[]"),
+                        initialStreak = preferences.getInt("streak", 0),
+                        initialLongestStreak = preferences.getInt("longest_streak", 0),
                         onSettingsSaved = { categories, start, end, prompts, maxQueueSize, sheetUrl ->
                             preferences.edit()
                                 .putBoolean("setup_complete", true)
@@ -133,7 +135,6 @@ class MainActivity : ComponentActivity() {
                                 .putString("external_sheet_url", sheetUrl)
                                 .putBoolean("background_prompts_enabled", true)
                                 .apply()
-                            PromptScheduler.scheduleNext(this)
                         },
                         onUserTasksSaved = { userTasks ->
                             preferences.edit()
@@ -155,19 +156,11 @@ class MainActivity : ComponentActivity() {
                                 .putString("external_sheet_url", sheetUrl)
                                 .apply()
                         },
-                        onPromptDeliveryTracked = { deliveredCount, windowStartEpoch ->
-                            preferences.edit()
-                                .putInt("prompts_delivered_in_window", deliveredCount)
-                                .putLong("prompts_window_start_epoch", windowStartEpoch)
-                                .apply()
-                        },
                         onBackgroundPromptsChanged = { enabled ->
+                            // Only persisted here - while the app is foregrounded the alarm is
+                            // cancelled anyway (onStart/onStop own it) and the live pacing loop
+                            // reads this flag directly on every tick.
                             preferences.edit().putBoolean("background_prompts_enabled", enabled).apply()
-                            if (enabled) {
-                                PromptScheduler.scheduleNext(this)
-                            } else {
-                                PromptScheduler.cancel(this)
-                            }
                         }
                     )
                 }
@@ -181,14 +174,18 @@ class MainActivity : ComponentActivity() {
             .edit()
             .putBoolean("app_in_foreground", true)
             .apply()
+        // The foreground pacing loop owns delivery while open; the background alarm chain would
+        // otherwise fire redundantly alongside it.
+        PromptScheduler.cancel(this)
     }
 
     override fun onStop() {
         super.onStop()
-        getSharedPreferences("microtasking_settings", MODE_PRIVATE)
-            .edit()
-            .putBoolean("app_in_foreground", false)
-            .apply()
+        val preferences = getSharedPreferences("microtasking_settings", MODE_PRIVATE)
+        preferences.edit().putBoolean("app_in_foreground", false).apply()
+        if (preferences.getBoolean("setup_complete", false)) {
+            PromptScheduler.scheduleNext(this)
+        }
     }
 
     companion object {
@@ -204,18 +201,18 @@ fun MicroTaskingApp(
     endHour: String,
     promptsPerDay: String,
     maxQueueSize: Int,
-    promptsDeliveredInWindow: Int,
-    promptsWindowStartEpoch: Long,
     externalSheetUrl: String,
     userTasks: List<UserTask>,
     managedTasks: List<ManagedTask>,
     declineCounts: Map<String, Int>,
+    initialTaskQueue: List<TaskStackEntry>,
+    initialStreak: Int,
+    initialLongestStreak: Int,
     onSettingsSaved: (Set<String>, String, String, String, Int, String) -> Unit,
     onUserTasksSaved: (List<UserTask>) -> Unit,
     onManagedTasksSaved: (List<ManagedTask>) -> Unit,
     onDeclineCountsSaved: (Map<String, Int>) -> Unit,
     onSheetUrlSaved: (String) -> Unit,
-    onPromptDeliveryTracked: (Int, Long) -> Unit,
     onBackgroundPromptsChanged: (Boolean) -> Unit
 ) {
     var showingSettings by remember {
@@ -230,14 +227,12 @@ fun MicroTaskingApp(
     var savedEndHour by remember { mutableStateOf(endHour) }
     var savedPromptsPerDay by remember { mutableStateOf(promptsPerDay) }
     var savedMaxQueueSize by remember { mutableIntStateOf(maxQueueSize) }
-    var deliveredInWindow by remember { mutableIntStateOf(promptsDeliveredInWindow) }
-    var windowStartEpoch by remember { mutableStateOf(promptsWindowStartEpoch) }
     var savedSheetUrl by remember { mutableStateOf(externalSheetUrl) }
     var savedUserTasks by remember { mutableStateOf(userTasks) }
     var savedManagedTasks by remember { mutableStateOf(managedTasks) }
     var savedDeclineCounts by remember { mutableStateOf(declineCounts) }
-    var streak by remember { mutableIntStateOf(0) }
-    var longestStreak by remember { mutableIntStateOf(0) }
+    var streak by remember { mutableIntStateOf(initialStreak) }
+    var longestStreak by remember { mutableIntStateOf(initialLongestStreak) }
     var lastTaskCompleted by remember { mutableStateOf(true) }
     var scoreEntryToken by remember { mutableIntStateOf(0) }
     var backgroundPromptsRunning by remember { mutableStateOf(true) }
@@ -247,22 +242,32 @@ fun MicroTaskingApp(
     val context = LocalContext.current
     val availableCategories = (savedManagedTasks.map { it.category } + savedUserTasks.map { it.category })
         .distinct()
-    val activeCategoryOrder = availableCategories.filter { it in savedCategories }
     val promptTasks = eligiblePromptTasks(savedManagedTasks, savedUserTasks, savedCategories)
     var taskQueue by remember(promptTasks, savedMaxQueueSize) {
         mutableStateOf(makeTaskStack(promptTasks, maxEntries = savedMaxQueueSize))
     }
+    // Restores whatever was persisted from a prior session, once, without disturbing the
+    // regenerate-on-settings-change behavior above (which must keep using fresh data, not this
+    // one-time snapshot, whenever promptTasks/savedMaxQueueSize change later).
+    LaunchedEffect(Unit) {
+        if (initialTaskQueue.isNotEmpty()) {
+            taskQueue = initialTaskQueue
+        }
+    }
     val visibleTaskEntries = taskQueue.filter { it.isActionable() }
 
-    fun receiveQueuedTask(task: ManagedTask) {
-        val activeTasks = taskQueue.filter { it.isActionable() }
-        if (activeTasks.size >= savedMaxQueueSize) {
-            lastTaskCompleted = false
-            streak = 0
-        }
-        taskQueue = activeTasks.takeLast(savedMaxQueueSize - 1) + TaskStackEntry(task)
-        showingScore = false
-        PromptNotifier.show(context)
+    fun persistTaskQueue(newQueue: List<TaskStackEntry>) {
+        taskQueue = newQueue
+        TaskDelivery.prefs(context).edit().putString("task_queue", writeTaskQueue(newQueue)).apply()
+    }
+
+    fun persistStreak(newStreak: Int) {
+        streak = newStreak
+        if (newStreak > longestStreak) longestStreak = newStreak
+        TaskDelivery.prefs(context).edit()
+            .putInt("streak", newStreak)
+            .putInt("longest_streak", longestStreak)
+            .apply()
     }
 
     fun runSheetImport(url: String) {
@@ -300,40 +305,23 @@ fun MicroTaskingApp(
         if (promptTasks.isEmpty()) {
             return@LaunchedEffect
         }
-        val windowStartHour = savedStartHour.toIntOrNull() ?: 0
-        val windowEndHour = savedEndHour.toIntOrNull() ?: 24
-        val dailyPromptTarget = savedPromptsPerDay.toIntOrNull() ?: 0
         while (true) {
-            val now = LocalDateTime.now()
-            val windowStart = currentWindowStart(now, windowStartHour, windowEndHour).toEpochMillis()
-            if (windowStart != windowStartEpoch) {
-                windowStartEpoch = windowStart
-                deliveredInWindow = 0
-                onPromptDeliveryTracked(deliveredInWindow, windowStartEpoch)
-            }
-            val delayMs = nextPromptDelayMillis(
-                now,
-                windowStartHour,
-                windowEndHour,
-                dailyPromptTarget,
-                deliveredInWindow
-            )
+            val delayMs = TaskDelivery.computeNextDelayMillis(context)
             if (delayMs == null) {
                 delay(5 * 60_000L)
                 continue
             }
             delay(delayMs)
-            // Consume this delivery slot even while paused, so resuming doesn't dump a backlog
-            // of everything that would have arrived during the pause.
-            deliveredInWindow++
-            onPromptDeliveryTracked(deliveredInWindow, windowStartEpoch)
-            if (backgroundPromptsRunning) {
-                val nextTask = chooseWeightedTask(
-                    tasks = promptTasks,
-                    activeCategoryOrder = activeCategoryOrder,
-                    previousTaskId = taskQueue.lastOrNull { it.isActionable() }?.task?.id
-                )
-                receiveQueuedTask(nextTask)
+            // Goes through the same shared function the background alarm receiver uses, so
+            // whichever one is active (this loop while open, the alarm chain while closed) reads
+            // and writes the exact same persisted queue/streak/window state.
+            val added = TaskDelivery.deliverOrConsumeSlot(context)
+            val prefs = TaskDelivery.prefs(context)
+            taskQueue = readTaskQueue(prefs.getString("task_queue", "[]") ?: "[]")
+            streak = prefs.getInt("streak", 0)
+            longestStreak = prefs.getInt("longest_streak", 0)
+            if (added) {
+                showingScore = false
             }
         }
     }
@@ -421,33 +409,24 @@ fun MicroTaskingApp(
                 showingScore = true
             },
             onStart = { taskId ->
-                taskQueue = taskQueue.map {
-                    if (it.task.id == taskId) it.start() else it
-                }
+                persistTaskQueue(taskQueue.map { if (it.task.id == taskId) it.start() else it })
             },
             onComplete = { taskId ->
                 lastTaskCompleted = true
-                streak++
-                if (streak > longestStreak) longestStreak = streak
-                taskQueue = taskQueue.map {
-                    if (it.task.id == taskId) it.complete() else it
-                }
+                persistStreak(streak + 1)
+                persistTaskQueue(taskQueue.map { if (it.task.id == taskId) it.complete() else it })
                 scoreEntryToken++
                 showingScore = true
             },
             onAbandon = { taskId ->
                 lastTaskCompleted = false
-                streak = 0
-                taskQueue = taskQueue.map {
-                    if (it.task.id == taskId) it.abandon() else it
-                }
+                persistStreak(0)
+                persistTaskQueue(taskQueue.map { if (it.task.id == taskId) it.abandon() else it })
                 scoreEntryToken++
                 showingScore = true
             },
             onDefer = { taskId, days ->
-                taskQueue = taskQueue.map {
-                    if (it.task.id == taskId) it.defer(days) else it
-                }
+                persistTaskQueue(taskQueue.map { if (it.task.id == taskId) it.defer(days) else it })
                 savedDeclineCounts = savedDeclineCounts + (
                     taskId to (savedDeclineCounts[taskId] ?: 0) + 1
                 )
@@ -459,14 +438,19 @@ fun MicroTaskingApp(
                 )
                 onDeclineCountsSaved(savedDeclineCounts)
                 lastTaskCompleted = false
-                streak = 0
-                taskQueue = taskQueue.filter { it.task.id != taskId }
+                persistStreak(0)
+                persistTaskQueue(taskQueue.filter { it.task.id != taskId })
                 scoreEntryToken++
                 showingScore = true
             },
             onNextPrompt = {
-                taskQueue = makeTaskStack(promptTasks, maxEntries = savedMaxQueueSize)
+                persistTaskQueue(makeTaskStack(promptTasks, maxEntries = savedMaxQueueSize))
                 showingScore = false
+            },
+            backgroundPromptsRunning = backgroundPromptsRunning,
+            onBackgroundPromptsChanged = { enabled ->
+                backgroundPromptsRunning = enabled
+                onBackgroundPromptsChanged(enabled)
             }
         )
     }
@@ -478,8 +462,10 @@ fun TaskPromptScreen(
     taskEntries: List<TaskStackEntry>,
     streak: Int,
     maxQueueSize: Int,
+    backgroundPromptsRunning: Boolean,
     onOpenSettings: () -> Unit,
     onOpenScore: () -> Unit,
+    onBackgroundPromptsChanged: (Boolean) -> Unit,
     onStart: (String) -> Unit,
     onComplete: (String) -> Unit,
     onAbandon: (String) -> Unit,
@@ -509,6 +495,15 @@ fun TaskPromptScreen(
                     "Task queue: ${taskEntries.size} active of $maxQueueSize",
                     style = MaterialTheme.typography.labelLarge
                 )
+            }
+
+            item {
+                Button(
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = { onBackgroundPromptsChanged(!backgroundPromptsRunning) }
+                ) {
+                    Text(if (backgroundPromptsRunning) "Pause task queue" else "Resume task queue")
+                }
             }
 
             items(taskEntries, key = { it.task.id }) { entry ->
@@ -1452,54 +1447,6 @@ fun importExternalTasksFromSheet(url: String): SheetImportResult {
     return SheetImportResult(fallbackTasks, emptyList())
 }
 
-
-data class UserTask(val description: String, val category: String, val enabled: Boolean)
-
-private fun eligiblePromptTasks(
-    managedTasks: List<ManagedTask>,
-    legacyUserTasks: List<UserTask>,
-    selectedCategories: Set<String>
-): List<ManagedTask> {
-    val managedEligibleTasks = managedTasks
-        .filter { task ->
-            task.enabled && !task.temporarilyUnavailable && !task.neverSuggest &&
-                task.category in selectedCategories
-        }
-    val legacyEligibleTasks = legacyUserTasks
-        .filter { it.enabled && it.category in selectedCategories }
-        .mapIndexed { index, task ->
-            ManagedTask(
-                id = "legacy-$index-${task.description}",
-                description = task.description,
-                category = task.category,
-                durationMinutes = 5,
-                builtIn = false
-            )
-        }
-    return managedEligibleTasks + legacyEligibleTasks
-}
-
-private fun readUserTasks(json: String): List<UserTask> = runCatching {
-    val tasks = JSONArray(json)
-    List(tasks.length()) { index ->
-        val task = tasks.getJSONObject(index)
-        UserTask(
-            description = task.getString("description"),
-            category = task.getString("category"),
-            enabled = task.getBoolean("enabled")
-        )
-    }
-}.getOrDefault(emptyList())
-
-private fun writeUserTasks(tasks: List<UserTask>): String = JSONArray().apply {
-    tasks.forEach { task ->
-        put(JSONObject().apply {
-            put("description", task.description)
-            put("category", task.category)
-            put("enabled", task.enabled)
-        })
-    }
-}.toString()
 
 private val microTaskingColorScheme = lightColorScheme(
     primary = Color(0xFF2E7D32),
