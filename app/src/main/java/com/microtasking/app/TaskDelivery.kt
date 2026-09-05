@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Vern McGeorge. All rights reserved.
 package com.microtasking.app
 
 import android.content.Context
@@ -122,7 +123,9 @@ object TaskDelivery {
         var deliveredInWindow: Int,
         var countEpochDay: Long,
         var windowStartEpoch: Long,
-        var backgroundPromptsEnabled: Boolean
+        var backgroundPromptsEnabled: Boolean,
+        var timeoutStreak: Int,
+        var lastOutcome: TaskLifecycleState
     ) {
         fun persist(prefs: SharedPreferences) {
             prefs.edit()
@@ -133,6 +136,8 @@ object TaskDelivery {
                 .putLong("prompts_count_epoch_day", countEpochDay)
                 .putLong("prompts_window_start_epoch", windowStartEpoch)
                 .putBoolean("background_prompts_enabled", backgroundPromptsEnabled)
+                .putInt("timeout_streak", timeoutStreak)
+                .putString("last_outcome", lastOutcome.name)
                 .apply()
         }
     }
@@ -162,12 +167,18 @@ object TaskDelivery {
             deliveredInWindow = prefs.getInt("prompts_delivered_in_window", 0),
             countEpochDay = prefs.getLong("prompts_count_epoch_day", -1L),
             windowStartEpoch = prefs.getLong("prompts_window_start_epoch", 0L),
-            backgroundPromptsEnabled = prefs.getBoolean("background_prompts_enabled", true)
+            backgroundPromptsEnabled = prefs.getBoolean("background_prompts_enabled", true),
+            timeoutStreak = prefs.getInt("timeout_streak", 0),
+            lastOutcome = runCatching {
+                TaskLifecycleState.valueOf(prefs.getString("last_outcome", TaskLifecycleState.COMPLETED.name)!!)
+            }.getOrDefault(TaskLifecycleState.COMPLETED)
         )
 
         if (!isWithinActiveWindow(now, settings.startHour, settings.endHour) && state.queue.any { it.isActionable() }) {
             state.queue = state.queue.map { if (it.isActionable()) it.abandon() else it }
             state.streak = 0
+            state.timeoutStreak = 0
+            state.lastOutcome = TaskLifecycleState.ABANDONED
         }
 
         val today = now.toLocalDate().toEpochDay()
@@ -214,15 +225,23 @@ object TaskDelivery {
         if (isWithinActiveWindow(now, settings.startHour, settings.endHour)) {
             if (state.backgroundPromptsEnabled) {
                 val activeTasks = state.queue.filter { it.isActionable() }
+                val keepCount = (settings.maxQueueSize - 1).coerceAtLeast(0)
                 if (activeTasks.size >= settings.maxQueueSize) {
+                    // The oldest entries beyond keepCount are about to be pushed off the queue by
+                    // the new arrival below without the user ever having acted on them - that's a
+                    // timeout, not a completion, and needs to be recorded as such rather than
+                    // silently vanishing.
+                    val timedOutCount = activeTasks.size - keepCount
                     state.streak = 0
+                    state.timeoutStreak += timedOutCount
+                    state.lastOutcome = TaskLifecycleState.TIMED_OUT
                 }
                 val nextTask = chooseWeightedTask(
                     tasks = settings.promptTasks,
                     activeCategoryOrder = settings.activeCategoryOrder,
                     previousTaskId = activeTasks.lastOrNull()?.task?.id
                 )
-                state.queue = activeTasks.takeLast((settings.maxQueueSize - 1).coerceAtLeast(0)) + TaskStackEntry(nextTask)
+                state.queue = activeTasks.takeLast(keepCount) + TaskStackEntry(nextTask)
                 taskAdded = true
             }
             state.deliveredInWindow++

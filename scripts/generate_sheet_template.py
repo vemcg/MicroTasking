@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Vern McGeorge. All rights reserved.
 """Builds the Google Sheets import template (one tab per category) from content/tasks.json.
 
 Upload the resulting .xlsx to Google Drive; it opens as a native Sheet with tabs already

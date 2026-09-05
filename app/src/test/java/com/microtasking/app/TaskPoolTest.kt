@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Vern McGeorge. All rights reserved.
 package com.microtasking.app
 
 import org.junit.Assert.assertEquals
@@ -48,8 +49,8 @@ class TaskPoolTest {
         assertTrue(started.isActionable())
         assertEquals(TaskLifecycleState.COMPLETED, started.complete().state)
         assertEquals(TaskLifecycleState.ABANDONED, started.abandon().state)
-        assertEquals(TaskLifecycleState.DEFERRED, entry.defer(7).state)
-        assertTrue(!entry.defer(7).isActionable())
+        assertEquals(TaskLifecycleState.TIMED_OUT, entry.timeout().state)
+        assertTrue(!entry.timeout().isActionable())
     }
 
     @Test
@@ -58,7 +59,7 @@ class TaskPoolTest {
         val second = builtInTasks[1]
 
         repeat(20) {
-            assertEquals(second, chooseWeightedTask(listOf(first, second), emptyMap(), first.id))
+            assertEquals(second, chooseWeightedTask(listOf(first, second), listOf(first.category), first.id))
         }
     }
 

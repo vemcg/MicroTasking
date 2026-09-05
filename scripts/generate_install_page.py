@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Vern McGeorge. All rights reserved.
 """Generates the GitHub Pages install & onboarding page + QR code pointing at a release APK."""
 import argparse
 import pathlib

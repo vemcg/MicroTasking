@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Vern McGeorge. All rights reserved.
 package com.microtasking.app
 
 import android.content.Context
@@ -21,15 +22,14 @@ enum class TaskLifecycleState {
     STARTED,
     COMPLETED,
     ABANDONED,
-    DEFERRED
+    TIMED_OUT
 }
 
 data class TaskStackEntry(
     val task: ManagedTask,
     val state: TaskLifecycleState = TaskLifecycleState.READY,
     val startedAtEpochMs: Long? = null,
-    val completedAtEpochMs: Long? = null,
-    val deferredUntilEpochMs: Long? = null
+    val completedAtEpochMs: Long? = null
 ) {
     fun start(): TaskStackEntry = copy(
         state = TaskLifecycleState.STARTED,
@@ -42,10 +42,7 @@ data class TaskStackEntry(
 
     fun abandon(): TaskStackEntry = copy(state = TaskLifecycleState.ABANDONED)
 
-    fun defer(days: Long): TaskStackEntry = copy(
-        state = TaskLifecycleState.DEFERRED,
-        deferredUntilEpochMs = System.currentTimeMillis() + (days * 24 * 60 * 60 * 1000L)
-    )
+    fun timeout(): TaskStackEntry = copy(state = TaskLifecycleState.TIMED_OUT)
 
     fun isActionable(): Boolean = state == TaskLifecycleState.READY || state == TaskLifecycleState.STARTED
 }
@@ -134,8 +131,7 @@ fun readTaskQueue(json: String): List<TaskStackEntry> = runCatching {
             task = managedTaskFromJson(entry.getJSONObject("task")),
             state = TaskLifecycleState.valueOf(entry.getString("state")),
             startedAtEpochMs = entry.optNullableLong("startedAtEpochMs"),
-            completedAtEpochMs = entry.optNullableLong("completedAtEpochMs"),
-            deferredUntilEpochMs = entry.optNullableLong("deferredUntilEpochMs")
+            completedAtEpochMs = entry.optNullableLong("completedAtEpochMs")
         )
     }
 }.getOrDefault(emptyList())
@@ -147,7 +143,6 @@ fun writeTaskQueue(queue: List<TaskStackEntry>): String = JSONArray().apply {
             put("state", entry.state.name)
             put("startedAtEpochMs", entry.startedAtEpochMs ?: JSONObject.NULL)
             put("completedAtEpochMs", entry.completedAtEpochMs ?: JSONObject.NULL)
-            put("deferredUntilEpochMs", entry.deferredUntilEpochMs ?: JSONObject.NULL)
         })
     }
 }.toString()
@@ -195,7 +190,7 @@ fun taskStateLabel(state: TaskLifecycleState): String = when (state) {
     TaskLifecycleState.STARTED -> "Started"
     TaskLifecycleState.COMPLETED -> "Completed"
     TaskLifecycleState.ABANDONED -> "Abandoned"
-    TaskLifecycleState.DEFERRED -> "Deferred"
+    TaskLifecycleState.TIMED_OUT -> "Timed out"
 }
 
 fun writeDeclineCounts(counts: Map<String, Int>): String = JSONObject(counts).toString()

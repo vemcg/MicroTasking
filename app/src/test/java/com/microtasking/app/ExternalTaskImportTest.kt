@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Vern McGeorge. All rights reserved.
 package com.microtasking.app
 
 import org.junit.Assert.assertEquals

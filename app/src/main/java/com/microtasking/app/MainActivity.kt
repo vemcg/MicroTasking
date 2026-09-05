@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Vern McGeorge. All rights reserved.
 package com.microtasking.app
 
 import android.Manifest
@@ -106,7 +107,7 @@ class MainActivity : ComponentActivity() {
         }
         setContent {
             MaterialTheme(colorScheme = microTaskingColorScheme) {
-                Surface(modifier = Modifier.fillMaxSize(), color = Color.White) {
+                Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     MicroTaskingApp(
                         setupComplete = preferences.getBoolean("setup_complete", false),
                         selectedCategories = preferences.getStringSet(
@@ -128,6 +129,10 @@ class MainActivity : ComponentActivity() {
                         initialTaskQueue = readTaskQueue(preferences.getString("task_queue", "[]") ?: "[]"),
                         initialStreak = preferences.getInt("streak", 0),
                         initialLongestStreak = preferences.getInt("longest_streak", 0),
+                        initialTimeoutStreak = preferences.getInt("timeout_streak", 0),
+                        initialLastOutcome = runCatching {
+                            TaskLifecycleState.valueOf(preferences.getString("last_outcome", TaskLifecycleState.COMPLETED.name)!!)
+                        }.getOrDefault(TaskLifecycleState.COMPLETED),
                         onSettingsSaved = { categories, start, end, prompts, maxQueueSize, sheetUrl ->
                             preferences.edit()
                                 .putBoolean("setup_complete", true)
@@ -212,6 +217,8 @@ fun MicroTaskingApp(
     initialTaskQueue: List<TaskStackEntry>,
     initialStreak: Int,
     initialLongestStreak: Int,
+    initialTimeoutStreak: Int,
+    initialLastOutcome: TaskLifecycleState,
     onSettingsSaved: (Set<String>, String, String, String, Int, String) -> Unit,
     onUserTasksSaved: (List<UserTask>) -> Unit,
     onManagedTasksSaved: (List<ManagedTask>) -> Unit,
@@ -237,7 +244,8 @@ fun MicroTaskingApp(
     var savedDeclineCounts by remember { mutableStateOf(declineCounts) }
     var streak by remember { mutableIntStateOf(initialStreak) }
     var longestStreak by remember { mutableIntStateOf(initialLongestStreak) }
-    var lastTaskCompleted by remember { mutableStateOf(true) }
+    var timeoutStreak by remember { mutableIntStateOf(initialTimeoutStreak) }
+    var lastOutcome by remember { mutableStateOf(initialLastOutcome) }
     var scoreEntryToken by remember { mutableIntStateOf(0) }
     var backgroundPromptsRunning by remember { mutableStateOf(true) }
     var isImportingSheet by remember { mutableStateOf(false) }
@@ -246,6 +254,7 @@ fun MicroTaskingApp(
     val context = LocalContext.current
     val availableCategories = (savedManagedTasks.map { it.category } + savedUserTasks.map { it.category })
         .distinct()
+    val activeCategoryOrder = availableCategories.filter { it in savedCategories }
     val promptTasks = eligiblePromptTasks(savedManagedTasks, savedUserTasks, savedCategories)
     var taskQueue by remember(promptTasks, savedMaxQueueSize) {
         mutableStateOf(makeTaskStack(promptTasks, maxEntries = savedMaxQueueSize))
@@ -271,6 +280,18 @@ fun MicroTaskingApp(
         TaskDelivery.prefs(context).edit()
             .putInt("streak", newStreak)
             .putInt("longest_streak", longestStreak)
+            .apply()
+    }
+
+    // A manual action on a task is real engagement, so it always clears the "pushed off the top
+    // with no action taken" timeout streak - otherwise a stale timeout_streak read back from prefs
+    // on the next delivery tick would clobber this outcome even though nothing timed out since.
+    fun persistLastOutcome(outcome: TaskLifecycleState) {
+        lastOutcome = outcome
+        timeoutStreak = 0
+        TaskDelivery.prefs(context).edit()
+            .putString("last_outcome", outcome.name)
+            .putInt("timeout_streak", 0)
             .apply()
     }
 
@@ -324,6 +345,10 @@ fun MicroTaskingApp(
             taskQueue = readTaskQueue(prefs.getString("task_queue", "[]") ?: "[]")
             streak = prefs.getInt("streak", 0)
             longestStreak = prefs.getInt("longest_streak", 0)
+            timeoutStreak = prefs.getInt("timeout_streak", 0)
+            lastOutcome = runCatching {
+                TaskLifecycleState.valueOf(prefs.getString("last_outcome", TaskLifecycleState.COMPLETED.name)!!)
+            }.getOrDefault(TaskLifecycleState.COMPLETED)
             // A new window starting auto-clears a pause, which happens inside deliverOrConsumeSlot -
             // pick that up here so the Pause/Resume button doesn't show stale state.
             backgroundPromptsRunning = prefs.getBoolean("background_prompts_enabled", true)
@@ -398,7 +423,8 @@ fun MicroTaskingApp(
         ScoreScreen(
             streak = streak,
             longestStreak = longestStreak,
-            taskCompleted = lastTaskCompleted,
+            outcome = lastOutcome,
+            timeoutStreak = timeoutStreak,
             entryToken = scoreEntryToken,
             backgroundPromptsRunning = backgroundPromptsRunning,
             onOpenSettings = { showingSettings = true },
@@ -424,36 +450,31 @@ fun MicroTaskingApp(
                 persistTaskQueue(taskQueue.map { if (it.task.id == taskId) it.start() else it })
             },
             onComplete = { taskId ->
-                lastTaskCompleted = true
+                persistLastOutcome(TaskLifecycleState.COMPLETED)
                 persistStreak(streak + 1)
                 persistTaskQueue(taskQueue.map { if (it.task.id == taskId) it.complete() else it })
                 scoreEntryToken++
                 showingScore = true
             },
             onAbandon = { taskId ->
-                lastTaskCompleted = false
+                persistLastOutcome(TaskLifecycleState.ABANDONED)
                 persistStreak(0)
                 persistTaskQueue(taskQueue.map { if (it.task.id == taskId) it.abandon() else it })
                 scoreEntryToken++
                 showingScore = true
             },
-            onDefer = { taskId, days ->
-                persistTaskQueue(taskQueue.map { if (it.task.id == taskId) it.defer(days) else it })
-                savedDeclineCounts = savedDeclineCounts + (
-                    taskId to (savedDeclineCounts[taskId] ?: 0) + 1
+            onSubstitute = { taskId ->
+                // Not a decline and not scored - the point is that nothing about this task's
+                // outcome is being decided, it's simply being swapped for a different one in the
+                // same queue slot.
+                val queuedTaskIds = taskQueue.map { it.task.id }.toSet()
+                val candidates = promptTasks.filter { it.id !in queuedTaskIds }.ifEmpty { promptTasks }
+                val replacement = chooseWeightedTask(
+                    tasks = candidates,
+                    activeCategoryOrder = activeCategoryOrder,
+                    previousTaskId = taskId
                 )
-                onDeclineCountsSaved(savedDeclineCounts)
-            },
-            onChooseAlternative = { taskId ->
-                savedDeclineCounts = savedDeclineCounts + (
-                    taskId to (savedDeclineCounts[taskId] ?: 0) + 1
-                )
-                onDeclineCountsSaved(savedDeclineCounts)
-                lastTaskCompleted = false
-                persistStreak(0)
-                persistTaskQueue(taskQueue.filter { it.task.id != taskId })
-                scoreEntryToken++
-                showingScore = true
+                persistTaskQueue(taskQueue.map { if (it.task.id == taskId) TaskStackEntry(replacement) else it })
             },
             onNextPrompt = {
                 persistTaskQueue(makeTaskStack(promptTasks, maxEntries = savedMaxQueueSize))
@@ -481,8 +502,7 @@ fun TaskPromptScreen(
     onStart: (String) -> Unit,
     onComplete: (String) -> Unit,
     onAbandon: (String) -> Unit,
-    onDefer: (String, Long) -> Unit,
-    onChooseAlternative: (String) -> Unit,
+    onSubstitute: (String) -> Unit,
     onNextPrompt: () -> Unit
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
@@ -539,8 +559,7 @@ fun TaskPromptScreen(
                         TaskLifecycleState.READY -> {
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
                                 Button(modifier = Modifier.weight(1f), onClick = { onStart(task.id) }) { Text("Start") }
-                                Button(modifier = Modifier.weight(1f), onClick = { onDefer(task.id, 7) }) { Text("Defer 1w") }
-                                Button(modifier = Modifier.weight(1f), onClick = { onChooseAlternative(task.id) }) { Text("Reject") }
+                                Button(modifier = Modifier.weight(1f), onClick = { onSubstitute(task.id) }) { Text("Substitute") }
                             }
                         }
                         TaskLifecycleState.STARTED -> {
@@ -574,7 +593,8 @@ fun TaskPromptScreen(
 fun ScoreScreen(
     streak: Int,
     longestStreak: Int,
-    taskCompleted: Boolean,
+    outcome: TaskLifecycleState,
+    timeoutStreak: Int,
     entryToken: Int,
     backgroundPromptsRunning: Boolean,
     onOpenSettings: () -> Unit,
@@ -610,12 +630,26 @@ fun ScoreScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
+            val (headlineText, headlineColor) = when (outcome) {
+                TaskLifecycleState.ABANDONED -> "Task abandoned" to MaterialTheme.colorScheme.error
+                TaskLifecycleState.TIMED_OUT -> "Task timed out" to MaterialTheme.colorScheme.error
+                else -> "Task completed" to MaterialTheme.colorScheme.primary
+            }
             Text(
-                text = if (taskCompleted) "Task completed" else "Task abandoned",
+                text = headlineText,
                 style = MaterialTheme.typography.headlineMedium,
-                color = if (taskCompleted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                color = headlineColor
             )
-            if (streak > 0) {
+            if (outcome == TaskLifecycleState.TIMED_OUT) {
+                if (timeoutStreak > 0) {
+                    Text(
+                        text = "$timeoutStreak in a row",
+                        modifier = Modifier.padding(top = 16.dp),
+                        style = MaterialTheme.typography.displayMedium,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            } else if (streak > 0) {
                 Text(
                     text = "$streak in a row",
                     modifier = Modifier.padding(top = 16.dp),
@@ -1468,10 +1502,17 @@ fun importExternalTasksFromSheet(url: String): SheetImportResult {
 }
 
 
+// A calm, low-contrast palette on purpose: a soft gray canvas (not stark white) so the app doesn't
+// read as urgent, a green/teal primary for the everyday/positive state, and a muted coral - not
+// Material's default alarm red - for the abandoned/timed-out states so a bad outcome still reads
+// clearly without feeling punishing.
 private val microTaskingColorScheme = lightColorScheme(
-    primary = Color(0xFF2E7D32),
+    primary = Color(0xFF2E7D6B),
     onPrimary = Color.White,
-    secondary = Color(0xFF558B2F),
-    background = Color.White,
-    surface = Color.White
+    secondary = Color(0xFF5FA88F),
+    onSecondary = Color.White,
+    background = Color(0xFFEFF2F1),
+    surface = Color.White,
+    error = Color(0xFFE2725B),
+    onError = Color.White
 )

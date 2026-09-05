@@ -1,6 +1,8 @@
 /**
+ * Copyright (c) 2026 Vern McGeorge. All rights reserved.
+ *
  * MicroTasking - One-Click Google Apps Script to Populate your Google Sheet
- * 
+ *
  * INSTRUCTIONS:
  * 1. Open your Google Sheet: https://docs.google.com/spreadsheets/d/1Ss15J7afOl3HON6h2dI8f8hGi8JYjH0hRywuV0nCYOg/edit
  * 2. Click on "Extensions" -> "Apps Script" in the top menu.
