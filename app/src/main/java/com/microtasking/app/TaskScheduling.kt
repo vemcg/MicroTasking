@@ -88,7 +88,6 @@ fun LocalDateTime.toEpochMillis(): Long = atZone(ZoneId.systemDefault()).toInsta
  */
 const val TESTING_FAST_SCORE_WINDOWS = true
 private const val TEST_WEEK_WINDOW_MILLIS = 7 * 60_000L
-private const val TEST_MONTH_WINDOW_MILLIS = 30 * 60_000L
 
 /** How far back "this week" on the score screen looks - 7 real days, or 7 test minutes. */
 fun weekScoreWindowMillis(): Long =
@@ -96,11 +95,11 @@ fun weekScoreWindowMillis(): Long =
 
 /**
  * How far back "this month" on the score screen looks - as many real days as [now]'s calendar
- * month actually has (28-31), or 30 test minutes.
+ * month actually has (28-31), or that same count in minutes when testing (e.g. a 31-day month
+ * looks back 31 test minutes, not a flat 30) - the unit shrinks from days to minutes, but the
+ * count stays tied to the real length of the current month either way.
  */
-fun monthScoreWindowMillis(now: LocalDateTime): Long =
-    if (TESTING_FAST_SCORE_WINDOWS) {
-        TEST_MONTH_WINDOW_MILLIS
-    } else {
-        Duration.ofDays(now.toLocalDate().lengthOfMonth().toLong()).toMillis()
-    }
+fun monthScoreWindowMillis(now: LocalDateTime): Long {
+    val monthLengthInDays = now.toLocalDate().lengthOfMonth().toLong()
+    return if (TESTING_FAST_SCORE_WINDOWS) monthLengthInDays * 60_000L else Duration.ofDays(monthLengthInDays).toMillis()
+}
