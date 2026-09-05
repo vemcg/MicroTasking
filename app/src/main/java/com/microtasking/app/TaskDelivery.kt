@@ -125,7 +125,9 @@ object TaskDelivery {
         val newWindowStart = currentWindowStart(now, settings.startHour, settings.endHour).toEpochMillis()
         if (newWindowStart != windowStartEpoch) {
             if (queue.any { it.isActionable() }) {
-                queue = queue.filterNot { it.isActionable() }
+                // Abandon, don't just drop: scored the same as a manual Abandon (streak resets),
+                // and the terminal state is preserved rather than the entries silently vanishing.
+                queue = queue.map { if (it.isActionable()) it.abandon() else it }
                 streak = 0
             }
             windowStartEpoch = newWindowStart
