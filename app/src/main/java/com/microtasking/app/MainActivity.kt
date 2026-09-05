@@ -38,6 +38,7 @@ import androidx.compose.material.icons.filled.Settings
 import java.net.URL
 import java.net.URLDecoder
 import java.net.URLEncoder
+import java.time.LocalDate
 import java.time.LocalDateTime
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
@@ -133,6 +134,7 @@ class MainActivity : ComponentActivity() {
                         initialLastOutcome = runCatching {
                             TaskLifecycleState.valueOf(preferences.getString("last_outcome", TaskLifecycleState.COMPLETED.name)!!)
                         }.getOrDefault(TaskLifecycleState.COMPLETED),
+                        initialCompletionLog = readCompletionLog(preferences.getString("completion_log", "[]") ?: "[]"),
                         onSettingsSaved = { categories, start, end, prompts, maxQueueSize, sheetUrl ->
                             preferences.edit()
                                 .putBoolean("setup_complete", true)
@@ -219,6 +221,7 @@ fun MicroTaskingApp(
     initialLongestStreak: Int,
     initialTimeoutStreak: Int,
     initialLastOutcome: TaskLifecycleState,
+    initialCompletionLog: List<CompletionRecord>,
     onSettingsSaved: (Set<String>, String, String, String, Int, String) -> Unit,
     onUserTasksSaved: (List<UserTask>) -> Unit,
     onManagedTasksSaved: (List<ManagedTask>) -> Unit,
@@ -246,6 +249,7 @@ fun MicroTaskingApp(
     var longestStreak by remember { mutableIntStateOf(initialLongestStreak) }
     var timeoutStreak by remember { mutableIntStateOf(initialTimeoutStreak) }
     var lastOutcome by remember { mutableStateOf(initialLastOutcome) }
+    var completionLog by remember { mutableStateOf(initialCompletionLog) }
     var scoreEntryToken by remember { mutableIntStateOf(0) }
     var backgroundPromptsRunning by remember { mutableStateOf(true) }
     var isImportingSheet by remember { mutableStateOf(false) }
@@ -293,6 +297,16 @@ fun MicroTaskingApp(
             .putString("last_outcome", outcome.name)
             .putInt("timeout_streak", 0)
             .apply()
+    }
+
+    // 45 days comfortably covers the longest real (non-test) score window - a month never has
+    // more than 31 days - with margin, so this never trims something a real "this month" query
+    // still needs, regardless of TESTING_FAST_SCORE_WINDOWS.
+    fun persistCompletionLog(newLog: List<CompletionRecord>) {
+        val cutoff = System.currentTimeMillis() - 45L * 24 * 60 * 60 * 1000
+        val trimmed = newLog.filter { it.epochMs >= cutoff }
+        completionLog = trimmed
+        TaskDelivery.prefs(context).edit().putString("completion_log", writeCompletionLog(trimmed)).apply()
     }
 
     fun runSheetImport(url: String) {
@@ -423,6 +437,7 @@ fun MicroTaskingApp(
         ScoreScreen(
             streak = streak,
             longestStreak = longestStreak,
+            completionLog = completionLog,
             outcome = lastOutcome,
             timeoutStreak = timeoutStreak,
             entryToken = scoreEntryToken,
@@ -450,8 +465,10 @@ fun MicroTaskingApp(
                 persistTaskQueue(taskQueue.map { if (it.task.id == taskId) it.start() else it })
             },
             onComplete = { taskId ->
+                val newStreak = streak + 1
                 persistLastOutcome(TaskLifecycleState.COMPLETED)
-                persistStreak(streak + 1)
+                persistStreak(newStreak)
+                persistCompletionLog(completionLog + CompletionRecord(System.currentTimeMillis(), newStreak))
                 persistTaskQueue(taskQueue.map { if (it.task.id == taskId) it.complete() else it })
                 scoreEntryToken++
                 showingScore = true
@@ -593,6 +610,7 @@ fun TaskPromptScreen(
 fun ScoreScreen(
     streak: Int,
     longestStreak: Int,
+    completionLog: List<CompletionRecord>,
     outcome: TaskLifecycleState,
     timeoutStreak: Int,
     entryToken: Int,
@@ -657,14 +675,20 @@ fun ScoreScreen(
                     color = MaterialTheme.colorScheme.primary
                 )
             }
+            val nowMs = System.currentTimeMillis()
+            val now = LocalDateTime.now()
+            val todaySince = LocalDate.now().atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+            val todayLongest = longestStreakSince(completionLog, todaySince)
+            val weekLongest = longestStreakSince(completionLog, nowMs - weekScoreWindowMillis())
+            val monthLongest = longestStreakSince(completionLog, nowMs - monthScoreWindowMillis(now))
             Text(
                 text = "Longest streak",
                 modifier = Modifier.padding(top = 32.dp),
                 style = MaterialTheme.typography.labelLarge
             )
-            Text("Today: $longestStreak")
-            Text("This week: $longestStreak")
-            Text("This month: $longestStreak")
+            Text("Today: $todayLongest")
+            Text("This week: $weekLongest")
+            Text("This month: $monthLongest")
             Text("All time: $longestStreak")
             if (!backgroundPromptsRunning) {
                 Text(

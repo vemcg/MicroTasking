@@ -180,6 +180,34 @@ fun chooseWeightedTask(
     return candidates.random()
 }
 
+// One entry per completed task: the streak length it reached, so a per-period "longest streak"
+// is just the max streakAtCompletion among entries whose epochMs falls in that period - no need to
+// replay the whole history to reconstruct it.
+data class CompletionRecord(val epochMs: Long, val streakAtCompletion: Int)
+
+fun readCompletionLog(json: String): List<CompletionRecord> = runCatching {
+    val values = JSONArray(json)
+    List(values.length()) { index ->
+        val entry = values.getJSONObject(index)
+        CompletionRecord(
+            epochMs = entry.getLong("epochMs"),
+            streakAtCompletion = entry.getInt("streakAtCompletion")
+        )
+    }
+}.getOrDefault(emptyList())
+
+fun writeCompletionLog(log: List<CompletionRecord>): String = JSONArray().apply {
+    log.forEach { record ->
+        put(JSONObject().apply {
+            put("epochMs", record.epochMs)
+            put("streakAtCompletion", record.streakAtCompletion)
+        })
+    }
+}.toString()
+
+fun longestStreakSince(log: List<CompletionRecord>, sinceEpochMs: Long): Int =
+    log.filter { it.epochMs >= sinceEpochMs }.maxOfOrNull { it.streakAtCompletion } ?: 0
+
 fun readDeclineCounts(json: String): Map<String, Int> = runCatching {
     val values = JSONObject(json)
     values.keys().asSequence().associateWith { values.getInt(it) }

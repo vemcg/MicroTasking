@@ -80,3 +80,27 @@ fun nextPromptDelayMillis(
 }
 
 fun LocalDateTime.toEpochMillis(): Long = atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+
+/**
+ * TESTING ONLY: shrinks the "this week"/"this month" score-screen windows down to minutes so the
+ * per-period longest-streak buckets can be exercised in a few minutes instead of actually waiting
+ * days. Flip back to false before shipping a real release build.
+ */
+const val TESTING_FAST_SCORE_WINDOWS = true
+private const val TEST_WEEK_WINDOW_MILLIS = 7 * 60_000L
+private const val TEST_MONTH_WINDOW_MILLIS = 30 * 60_000L
+
+/** How far back "this week" on the score screen looks - 7 real days, or 7 test minutes. */
+fun weekScoreWindowMillis(): Long =
+    if (TESTING_FAST_SCORE_WINDOWS) TEST_WEEK_WINDOW_MILLIS else Duration.ofDays(7).toMillis()
+
+/**
+ * How far back "this month" on the score screen looks - as many real days as [now]'s calendar
+ * month actually has (28-31), or 30 test minutes.
+ */
+fun monthScoreWindowMillis(now: LocalDateTime): Long =
+    if (TESTING_FAST_SCORE_WINDOWS) {
+        TEST_MONTH_WINDOW_MILLIS
+    } else {
+        Duration.ofDays(now.toLocalDate().lengthOfMonth().toLong()).toMillis()
+    }
