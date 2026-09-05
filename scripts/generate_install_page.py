@@ -2,6 +2,7 @@
 """Generates the GitHub Pages install & onboarding page + QR code pointing at a release APK."""
 import argparse
 import pathlib
+import re
 
 import qrcode
 from qrcode.constants import ERROR_CORRECT_H
@@ -104,14 +105,22 @@ def main() -> None:
     def normalize(version: str) -> str:
         return version if version.startswith("v") else f"v{version}"
 
-    display_version = normalize(args.version)
+    # The branch name is already shown once via the qr-label heading above each QR, so the
+    # version shown in the carve-out and the download button drops it rather than repeating it -
+    # e.g. "v0.1.7-36-background-tasking" displays as "v0.1.7-36". The actual download link/asset
+    # filename is untouched - it still needs the full, exact tag to resolve to the right file.
+    def short_display_version(version: str) -> str:
+        match = re.match(r"^v?\d+\.\d+\.\d+-\d+", version)
+        return normalize(match.group(0)) if match else normalize(version)
+
+    display_version = short_display_version(args.version)
 
     make_qr_with_logo(args.url, display_version, out_dir / "qr.png")
 
     # Only show a second, side-by-side QR code when this build is off a non-main branch and
     # we actually found a prior main release to point at - main builds still get a single QR.
     show_main_qr = bool(args.main_url) and args.branch != "main"
-    main_display_version = normalize(args.main_version) if args.main_version else ""
+    main_display_version = short_display_version(args.main_version) if args.main_version else ""
     if show_main_qr:
         make_qr_with_logo(args.main_url, main_display_version, out_dir / "qr-main.png")
 

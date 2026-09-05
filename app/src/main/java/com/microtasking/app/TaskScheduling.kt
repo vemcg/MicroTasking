@@ -43,8 +43,17 @@ fun millisUntilWindowCloses(now: LocalDateTime, startHour: Int, endHour: Int): L
 }
 
 /**
+ * Floor on the delay nextPromptDelayMillis can return. Without this, opening the app very late
+ * in the active window with many prompts still due makes remainingWindowMillis / remainingPrompts
+ * round down toward zero, which used to fire a rapid-fire burst of deliveries (each one doing
+ * disk I/O and posting a notification) tight enough to ANR the app.
+ */
+private const val MIN_DELAY_MILLIS = 30_000L
+
+/**
  * Delay in millis until the next task should be added to the queue, or null if nothing more
- * should be delivered until the next window occurrence (quota reached, or prompts disabled).
+ * should be delivered until the next window occurrence (quota reached, prompts disabled, or too
+ * little time is left in the window to safely deliver anything else today).
  * Spreads the remaining quota unevenly across the remaining window time rather than on a fixed beat.
  */
 fun nextPromptDelayMillis(
@@ -62,9 +71,9 @@ fun nextPromptDelayMillis(
     val remainingPrompts = promptsPerDay - promptsDeliveredInWindow
     val remainingWindowMillis = millisUntilWindowCloses(now, startHour, endHour)
         ?: Duration.ofHours(24).toMillis()
-    if (remainingWindowMillis <= 0L) return null
-    val averageInterval = (remainingWindowMillis / remainingPrompts).coerceAtLeast(1L)
-    val low = (averageInterval / 2).coerceAtLeast(1L)
+    if (remainingWindowMillis < MIN_DELAY_MILLIS) return null
+    val averageInterval = (remainingWindowMillis / remainingPrompts).coerceAtLeast(MIN_DELAY_MILLIS)
+    val low = (averageInterval / 2).coerceAtLeast(MIN_DELAY_MILLIS)
     val high = (averageInterval + averageInterval / 2).coerceAtLeast(low + 1L)
     return (low + random.nextLong(high - low)).coerceAtMost(remainingWindowMillis)
 }
