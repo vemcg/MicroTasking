@@ -90,26 +90,45 @@ object TaskDelivery {
         )
     }
 
-    /** Millis until the next delivery slot, or null if nothing should ever be delivered right now. */
+    /**
+     * Millis until the next thing that needs to happen: either a delivery, or - if that would be
+     * later than the window closing - the window close itself, so a leftover queue gets abandoned
+     * right when the window closes instead of sitting stale until whenever the app next happens
+     * to check. Null only when nothing should ever run right now (outside the window, wait for it
+     * to open instead - see millisUntilWindowOpens).
+     */
     fun computeNextDelayMillis(context: Context): Long? {
         val settings = loadSettings(context) ?: return null
         val prefs = prefs(context)
         val now = LocalDateTime.now()
+        if (!isWithinActiveWindow(now, settings.startHour, settings.endHour)) {
+            return millisUntilWindowOpens(now, settings.startHour, settings.endHour)
+        }
         val windowStart = currentWindowStart(now, settings.startHour, settings.endHour).toEpochMillis()
         val deliveredInWindow = if (windowStart == prefs.getLong("prompts_window_start_epoch", 0L)) {
             prefs.getInt("prompts_delivered_in_window", 0)
         } else {
             0
         }
-        return nextPromptDelayMillis(now, settings.startHour, settings.endHour, settings.promptsPerDay, deliveredInWindow)
+        val deliveryDelay = nextPromptDelayMillis(now, settings.startHour, settings.endHour, settings.promptsPerDay, deliveredInWindow)
+        val closeDelay = millisUntilWindowCloses(now, settings.startHour, settings.endHour) ?: return deliveryDelay
+        return if (deliveryDelay == null) closeDelay else minOf(deliveryDelay, closeDelay)
     }
 
     /**
-     * Runs one delivery slot against persisted state: rolls the active window over first (timing
-     * out anything left in the queue and resetting the streak if the window just closed), then
-     * either adds a task to the queue or - if background prompts are paused - just consumes the
-     * slot silently, so a long pause can't cram a burst of catch-up deliveries in when it ends.
-     * Returns true if a task was actually added (the caller decides whether to notify from that).
+     * Runs one tick against persisted state. Two independent things can happen here, matched to
+     * wall-clock reality rather than to each other:
+     *  - Outside the active window: anything still actionable in the queue is abandoned (scored
+     *    the same as a manual Abandon) and the streak resets. This is what "the window closed"
+     *    means for the queue - by the time the window opens again there should be nothing left.
+     *  - A new window occurrence beginning: resets the daily delivery count and clears a pause
+     *    (a pause only lasts for the window it was pressed in). Nothing else - if the queue
+     *    somehow isn't empty at this point, it's left alone and simply built on top of, never
+     *    abandoned or scored here.
+     * Only when inside the window does it then either add a task to the queue or - if paused -
+     * just consume the delivery slot silently, so a long pause can't cram a burst of catch-up
+     * deliveries in when it ends. Returns true if a task was actually added (the caller decides
+     * whether to notify from that).
      */
     fun deliverOrConsumeSlot(context: Context): Boolean {
         val settings = loadSettings(context) ?: return false
@@ -123,36 +142,36 @@ object TaskDelivery {
         var windowStartEpoch = prefs.getLong("prompts_window_start_epoch", 0L)
         var backgroundPromptsEnabled = prefs.getBoolean("background_prompts_enabled", true)
 
+        val withinWindow = isWithinActiveWindow(now, settings.startHour, settings.endHour)
+        if (!withinWindow && queue.any { it.isActionable() }) {
+            queue = queue.map { if (it.isActionable()) it.abandon() else it }
+            streak = 0
+        }
+
         val newWindowStart = currentWindowStart(now, settings.startHour, settings.endHour).toEpochMillis()
         if (newWindowStart != windowStartEpoch) {
-            if (queue.any { it.isActionable() }) {
-                // Abandon, don't just drop: scored the same as a manual Abandon (streak resets),
-                // and the terminal state is preserved rather than the entries silently vanishing.
-                queue = queue.map { if (it.isActionable()) it.abandon() else it }
-                streak = 0
-            }
             windowStartEpoch = newWindowStart
             deliveredInWindow = 0
-            // A pause only lasts for the window it was pressed in - the next window starting
-            // fresh is the one and only other thing that un-pauses it (see also: a cold launch).
             backgroundPromptsEnabled = true
         }
 
         var taskAdded = false
-        if (backgroundPromptsEnabled) {
-            val activeTasks = queue.filter { it.isActionable() }
-            if (activeTasks.size >= settings.maxQueueSize) {
-                streak = 0
+        if (withinWindow) {
+            if (backgroundPromptsEnabled) {
+                val activeTasks = queue.filter { it.isActionable() }
+                if (activeTasks.size >= settings.maxQueueSize) {
+                    streak = 0
+                }
+                val nextTask = chooseWeightedTask(
+                    tasks = settings.promptTasks,
+                    activeCategoryOrder = settings.activeCategoryOrder,
+                    previousTaskId = activeTasks.lastOrNull()?.task?.id
+                )
+                queue = activeTasks.takeLast((settings.maxQueueSize - 1).coerceAtLeast(0)) + TaskStackEntry(nextTask)
+                taskAdded = true
             }
-            val nextTask = chooseWeightedTask(
-                tasks = settings.promptTasks,
-                activeCategoryOrder = settings.activeCategoryOrder,
-                previousTaskId = activeTasks.lastOrNull()?.task?.id
-            )
-            queue = activeTasks.takeLast((settings.maxQueueSize - 1).coerceAtLeast(0)) + TaskStackEntry(nextTask)
-            taskAdded = true
+            deliveredInWindow++
         }
-        deliveredInWindow++
 
         prefs.edit()
             .putString("task_queue", writeTaskQueue(queue))
