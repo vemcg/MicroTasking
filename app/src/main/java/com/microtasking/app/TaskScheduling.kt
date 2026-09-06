@@ -64,8 +64,10 @@ private fun minDelayMillis(promptsPerDay: Int): Long = if (isRapidTestingMode(pr
 
 /**
  * Delay in millis until the next task should be added to the queue, or null if nothing more
- * should be delivered until the next window occurrence (quota reached, prompts disabled, or too
- * little time is left in the window to safely deliver anything else today).
+ * should be delivered until the next window occurrence (quota reached or too little time is left
+ * in the window to safely deliver anything else today). Assumes the caller has already decided
+ * delivery should happen right now (see [TaskDelivery.computeNextDelayMillis]) - this is purely
+ * pacing math, not a window gate.
  * Spreads the remaining quota unevenly across the remaining window time rather than on a fixed beat.
  */
 fun nextPromptDelayMillis(
@@ -77,12 +79,15 @@ fun nextPromptDelayMillis(
     random: Random = Random.Default
 ): Long? {
     if (promptsPerDay <= 0 || promptsDeliveredInWindow >= promptsPerDay) return null
-    if (!isWithinActiveWindow(now, startHour, endHour)) {
-        return millisUntilWindowOpens(now, startHour, endHour)
-    }
     val remainingPrompts = promptsPerDay - promptsDeliveredInWindow
-    val remainingWindowMillis = millisUntilWindowCloses(now, startHour, endHour)
-        ?: Duration.ofHours(24).toMillis()
+    // Only a real, currently-active window has a meaningful "close" to pace against - a manual
+    // override running outside the configured window (for testing) has no such boundary, so it's
+    // treated the same as an always-active window: a flat 24h.
+    val remainingWindowMillis = if (isWithinActiveWindow(now, startHour, endHour)) {
+        millisUntilWindowCloses(now, startHour, endHour) ?: Duration.ofHours(24).toMillis()
+    } else {
+        Duration.ofHours(24).toMillis()
+    }
     val minDelay = minDelayMillis(promptsPerDay)
     if (remainingWindowMillis < minDelay) return null
     val averageInterval = (remainingWindowMillis / remainingPrompts).coerceAtLeast(minDelay)

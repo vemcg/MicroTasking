@@ -34,24 +34,31 @@ jobs:
           VERSION_NAME="${VERSION_BASE}-${BUILD_NUMBER}"
           VERSION_CODE=$(date -u +%s)
           BRANCH="${GITHUB_REF_NAME}"
-          # Tag and asset name are always this short "vBASE-N" shape, for every branch - no branch
-          # name gets stuffed into either, so the actual downloaded file stays short and manageable
-          # on a phone (e.g. "MicroTasking-v0.1.7-46.apk"). Branch identity lives only in the
-          # release *title* below (GitHub's own bookkeeping - not user-facing on the phone), the
-          # onboarding page's QR label, and the app's own About section - nowhere else.
-          TAG="v${VERSION_NAME}"
-          ASSET_NAME="MicroTasking-$TAG.apk"
+          # DISPLAY_VERSION always increments per build and is only ever shown to a human - the QR
+          # label, the release title. Main keeps a permanent, versioned tag/asset per build (real
+          # release history). Every other branch shares ONE fixed tag/asset ("dev"), so the actual
+          # downloaded file is always the exact same short name/URL - one file, every time, no
+          # branch name and no version number baked in - and gets fully replaced each build (see
+          # "Remove previous dev release" below) instead of piling up. Branch identity still shows
+          # up in the release *title* (GitHub's own bookkeeping), the onboarding page's QR label,
+          # and the app's About section - just not in the filename/tag/URL.
+          DISPLAY_VERSION="v${VERSION_NAME}"
           if [ "$BRANCH" = "main" ]; then
-            RELEASE_NAME="MicroTasking $TAG"
+            TAG="$DISPLAY_VERSION"
+            ASSET_NAME="MicroTasking-$TAG.apk"
+            RELEASE_NAME="MicroTasking $DISPLAY_VERSION"
           else
             SAFE_BRANCH=$(printf '%s' "$BRANCH" | tr -c 'A-Za-z0-9._-' '-')
-            RELEASE_NAME="MicroTasking $TAG ($SAFE_BRANCH)"
+            TAG="dev"
+            ASSET_NAME="MicroTasking-dev.apk"
+            RELEASE_NAME="MicroTasking $DISPLAY_VERSION ($SAFE_BRANCH)"
           fi
           echo "version_base=$VERSION_BASE" >> "$GITHUB_OUTPUT"
           echo "build_number=$BUILD_NUMBER" >> "$GITHUB_OUTPUT"
           echo "build_timestamp=$BUILD_TIMESTAMP" >> "$GITHUB_OUTPUT"
           echo "git_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
           echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          echo "display_version=$DISPLAY_VERSION" >> "$GITHUB_OUTPUT"
           echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "release_name=$RELEASE_NAME" >> "$GITHUB_OUTPUT"
@@ -73,22 +80,16 @@ jobs:
           mkdir -p dist
           cp app/build/outputs/apk/debug/app-debug.apk "dist/${{ steps.version.outputs.asset_name }}"
 
-      - name: Remove previous dev releases (only one kept at a time)
-        # Every dev/branch build gets its own short, incrementing tag (see "Determine timestamped
-        # version/tag"), so there's no single fixed tag to overwrite - instead, delete every
-        # existing non-main release (identified by title, same "(branch)" suffix used everywhere
-        # else) before creating this build's, so exactly one dev release survives: whichever was
-        # most recently built, regardless of which branch. Never touches main's releases.
+      - name: Remove previous dev release
+        # Every non-main branch shares the single fixed "dev" tag (see "Determine timestamped
+        # version/tag") - delete whatever it currently points to so this build's release fully
+        # replaces it (one file, always) instead of failing on a duplicate tag. continue-on-error
+        # covers the first-ever build, when there's nothing yet to delete.
         if: steps.version.outputs.git_branch != 'main'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release list --limit 100 --json tagName,name \
-            | jq -r '.[] | select(.name | contains(" (")) | .tagName' \
-            | while read -r old_tag; do
-                gh release delete "$old_tag" --yes --cleanup-tag
-              done
+        run: gh release delete "${{ steps.version.outputs.tag }}" --yes --cleanup-tag
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
@@ -104,13 +105,12 @@ jobs:
         run: |
           MAIN_TAG=""
           if [ "${{ steps.version.outputs.git_branch }}" != "main" ]; then
-            # Tags are always the plain "vBASE-N" shape now (see "Determine timestamped
-            # version/tag"), so main-vs-branch can't be told apart by tag anymore - the release
-            # *title* carries that instead ("MicroTasking vBASE-N" for main, with a "(branch)"
-            # suffix for everything else). publishedAt, not createdAt: createdAt tracks the
-            # tagged commit's date, which several releases built from the same commit window
-            # share - it can't tell them apart. publishedAt is the actual release-publish
-            # moment, always distinct.
+            # Non-main branches now use the fixed "dev" tag (see "Determine timestamped
+            # version/tag"), so this can't just look for "the other tag" - it keys off the release
+            # *title* instead ("MicroTasking vBASE-N" for main, with a "(branch)" suffix for
+            # everything else). publishedAt, not createdAt: createdAt tracks the tagged commit's
+            # date, which several releases built from the same commit window share - it can't tell
+            # them apart. publishedAt is the actual release-publish moment, always distinct.
             MAIN_TAG=$(gh release list --limit 50 --json tagName,name,publishedAt \
               | jq -r '[.[] | select(.name | test("^MicroTasking v[0-9]+\\.[0-9]+\\.[0-9]+-[0-9]+$"))] | sort_by(.publishedAt) | last | .tagName // empty')
           fi
@@ -128,7 +128,7 @@ jobs:
         run: |
           python scripts/generate_install_page.py \
             --url "https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.tag }}/${{ steps.version.outputs.asset_name }}" \
-            --version "${{ steps.version.outputs.tag }}" \
+            --version "${{ steps.version.outputs.display_version }}" \
             --branch "${{ steps.version.outputs.git_branch }}" \
             --main-url "${{ steps.mainrelease.outputs.main_url }}" \
             --main-version "${{ steps.mainrelease.outputs.main_tag }}" \
