@@ -141,8 +141,19 @@ def main() -> None:
             {qr_block(args.main_url, main_display_version, "qr-main.png", "Stable Release")}
             {qr_block(args.url, display_version, "qr.png", args.branch)}
           </div>"""
+        scan_target = "the <strong>Stable Release</strong> QR code (on the left) below"
+        qr_guidance_html = (
+            '<p class="qr-guidance"><strong>Which one to use:</strong> Install from the '
+            '<strong>Stable Release</strong> on the left &mdash; that is the build you should '
+            f'download and run. The <strong>{args.branch}</strong> development build on the right '
+            'is an in-progress branch, published for testing only. You are welcome to try it, but '
+            'it may be unstable, may fail to install or launch, and carries no guarantee that it '
+            'works at all.</p>'
+        )
     else:
         qr_section_html = qr_block(args.url, display_version, "qr.png")
+        scan_target = "the QR code below"
+        qr_guidance_html = ""
 
 
     html = f"""<!DOCTYPE html>
@@ -308,6 +319,16 @@ def main() -> None:
     vertical-align: middle;
     margin-left: 0.5rem;
   }}
+  .qr-guidance {{
+    margin-top: 1rem;
+    padding: 0.9rem 1rem;
+    background: #0b1220;
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: 6px;
+    font-size: 0.95rem;
+    color: #cbd5e1;
+  }}
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 </head>
@@ -344,8 +365,9 @@ def main() -> None:
       </div>
       <ol>
         <li>
-          <strong>Scan or Download:</strong> Point your phone's camera at the QR code below, or click the direct download link if viewing this page on your phone:
+          <strong>Scan or Download:</strong> Point your phone's camera at {scan_target}, or tap its download link if you are viewing this page on your phone:
           {qr_section_html}
+          {qr_guidance_html}
         </li>
         <li>
           <strong>Allow Sideloading (First Time Only):</strong>
