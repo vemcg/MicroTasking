@@ -3,10 +3,30 @@
 Next work session: make onboarding, import, the spreadsheet template, persistence, versioning, and update behavior production-ready.
 
 1. **Spreadsheet improvements** — *code written on branch `spreadsheet-improvements`, NOT yet in a working end-to-end state. Not merged.*
-   - **Current state (2026-09-06, paused mid-verification):**
-     - App-side import changes are built into dev release **v0.1.7-55** but have **not** been verified on device against a real sheet.
-     - The Apps Script (`scripts/populate_google_sheet.js`) was pasted into a copy of the template Sheet and **hung on Run** — most likely the old blocking `getUi().alert()` (waits for a click in the Sheet tab) or a blocked authorization popup. Swapped `alert()` → non-blocking `toast()` and added a bound-script guard (commit `3a1e7fb`), but the script has **not** been successfully run yet, so `onEdit`/header behavior is unverified and the shared template Sheet is **not** rebuilt.
-     - Next: get `setupMicroTaskingSheet` to complete once (check Executions pane for the real outcome), confirm the `onEdit` checkbox behavior, then re-verify import on device, then merge.
+   - **RESUME HERE — current state (2026-09-06, Wi-Fi dropped mid-verification). Delete lines from this block as each step is done.**
+
+     **Where we stopped:** the Apps Script `setupMicroTaskingSheet` was pasted into a *copy* of the template Sheet and hit Run; the editor showed "Running…" and never returned ("hung forever"). Fix pushed (`3a1e7fb`) but the script has still never completed a clean run. App-side import code is in dev release **v0.1.7-55** but unverified on device. Shared template Sheet NOT rebuilt. Branch `spreadsheet-improvements` NOT merged.
+
+     **Answers to the questions asked (no code change needed — reference):**
+     - No dependency, no library, no add-on. Function to run is `setupMicroTaskingSheet` (pick it in the toolbar dropdown — `onEdit`/`syncRowCheckbox_` are triggers, never run by hand).
+     - Script/file name doesn't matter. Spreadsheet name doesn't matter.
+     - Works on a blank/empty spreadsheet (it creates README + category tabs and deletes the default "Sheet1").
+     - It DOES require a **bound** script: opened via Extensions → Apps Script from *inside* the Sheet. A standalone script.google.com project makes `getActiveSpreadsheet()` return null → now throws a clear error instead of misbehaving.
+
+     **Most likely reason it hung (script probably actually finished its work):**
+     1. The old `SpreadsheetApp.getUi().alert(...)` at the end blocks, waiting for an OK click in the *spreadsheet browser tab*, while you were watching the Apps Script editor → "Running…" forever. FIXED in `3a1e7fb`: now a non-blocking `ss.toast(...)`.
+     2. Authorization popup blocked by the browser. First run needs: *Review permissions → pick account → Advanced → Go to `<project>` (unsafe) → Allow.* If nothing pops up, allow popups for script.google.com and Run again.
+     3. Wrong function selected in the Run dropdown.
+
+     **Steps to resume (do in order, delete each as done):**
+     1. Re-paste the updated `scripts/populate_google_sheet.js` (branch `spreadsheet-improvements`, commit `3a1e7fb` or later) into the bound Apps Script editor of a fresh copy of the template Sheet. Save (Ctrl+S).
+     2. Select `setupMicroTaskingSheet` in the toolbar dropdown, Run, click through the authorization dialog.
+     3. If it still seems stuck: open the **Executions** pane (clock icon, left sidebar) — it shows whether the run Completed / Failed (with the error) / is genuinely Running. A real run is ~10s; multi-minute = blocked, not computing. Also check the Sheet itself — the tabs may already be populated.
+     4. Confirm `onEdit` behavior in the Sheet: type a description into an empty column-B cell → a checked checkbox should appear in column A that row; clear the description → the checkbox should disappear. Flip A1 → all rows in the tab follow.
+     5. Confirm headers are `Description`/`Link`, bold, centered.
+     6. Rebuild the **shared** template Sheet (the one the onboarding page links to) the same way, and set its sharing to "Anyone with the link can view".
+     7. On-device: install dev build **v0.1.7-55** (or newer), Settings → Import External Task Pool, scan the sheet QR, and verify: all rows import; unchecked rows show on the Task Pool screen but are not queued; the import toast shows the "(N checked and active)" count; a re-sync after toggling a task's "Never suggest" in-app keeps that flag.
+     8. If all good: merge `spreadsheet-improvements` → `main` (fast-forward), which auto-builds a new stable release.
    - Done: **auto-manage each row's checkbox from its description cell.** `onEdit` in `scripts/populate_google_sheet.js`: typing a description into column B on a row with no checkbox adds one (checked); clearing the description (trimmed empty) removes that row's column-A checkbox. Handles multi-row pastes; skips the README tab; A1 edits still fan out to every row.
    - Done: **header formatting.** B1/C1 read `Description`/`Link`, and A1:C1 are bold + horizontally centered — in both the Apps Script and the `.xlsx` builder (`scripts/generate_sheet_template.py`, which was also de-duplicated from a bad merge). Safe for import: `parseExternalTaskCsv` lowercases headers before matching.
    - Done: **import is positional on column A and imports everything.** `parseExternalTaskCsv` no longer looks for an "enabled"/"checkbox" header — column A is always the toggle. Every row with a description imports; an unchecked column A means `enabled = false` (stored, shown on the Task Pool screen, never queued). A tab with no checkboxes at all imports everything enabled (backward compat). The CSV splitter now honors `"`-quoted fields, so descriptions may contain commas.
