@@ -2,7 +2,11 @@
 
 Next work session: make onboarding, import, the spreadsheet template, persistence, versioning, and update behavior production-ready.
 
-1. **Spreadsheet improvements** — *implemented on branch `spreadsheet-improvements`, needs the shared template Sheet rebuilt (re-run `scripts/populate_google_sheet.js`) and on-device verification.*
+1. **Spreadsheet improvements** — *code written on branch `spreadsheet-improvements`, NOT yet in a working end-to-end state. Not merged.*
+   - **Current state (2026-09-06, paused mid-verification):**
+     - App-side import changes are built into dev release **v0.1.7-55** but have **not** been verified on device against a real sheet.
+     - The Apps Script (`scripts/populate_google_sheet.js`) was pasted into a copy of the template Sheet and **hung on Run** — most likely the old blocking `getUi().alert()` (waits for a click in the Sheet tab) or a blocked authorization popup. Swapped `alert()` → non-blocking `toast()` and added a bound-script guard (commit `3a1e7fb`), but the script has **not** been successfully run yet, so `onEdit`/header behavior is unverified and the shared template Sheet is **not** rebuilt.
+     - Next: get `setupMicroTaskingSheet` to complete once (check Executions pane for the real outcome), confirm the `onEdit` checkbox behavior, then re-verify import on device, then merge.
    - Done: **auto-manage each row's checkbox from its description cell.** `onEdit` in `scripts/populate_google_sheet.js`: typing a description into column B on a row with no checkbox adds one (checked); clearing the description (trimmed empty) removes that row's column-A checkbox. Handles multi-row pastes; skips the README tab; A1 edits still fan out to every row.
    - Done: **header formatting.** B1/C1 read `Description`/`Link`, and A1:C1 are bold + horizontally centered — in both the Apps Script and the `.xlsx` builder (`scripts/generate_sheet_template.py`, which was also de-duplicated from a bad merge). Safe for import: `parseExternalTaskCsv` lowercases headers before matching.
    - Done: **import is positional on column A and imports everything.** `parseExternalTaskCsv` no longer looks for an "enabled"/"checkbox" header — column A is always the toggle. Every row with a description imports; an unchecked column A means `enabled = false` (stored, shown on the Task Pool screen, never queued). A tab with no checkboxes at all imports everything enabled (backward compat). The CSV splitter now honors `"`-quoted fields, so descriptions may contain commas.
