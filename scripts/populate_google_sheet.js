@@ -4,16 +4,31 @@
  * MicroTasking - One-Click Google Apps Script to Populate your Google Sheet
  *
  * INSTRUCTIONS:
- * 1. Open your Google Sheet: https://docs.google.com/spreadsheets/d/1Ss15J7afOl3HON6h2dI8f8hGi8JYjH0hRywuV0nCYOg/edit
- * 2. Click on "Extensions" -> "Apps Script" in the top menu.
- * 3. Delete any code in the editor, paste this entire script, and click the Save icon (Ctrl+S).
- * 4. Click the "Run" button at the top.
- * 5. Grant permissions if prompted. Your Google Sheet will be automatically populated with README and all task tabs!
+ * 1. Open YOUR copy of the Sheet (File -> Make a copy of the template first).
+ * 2. In that copy: Extensions -> Apps Script. This must be the Sheet-bound editor, NOT a
+ *    standalone script.google.com project - the script acts on the Sheet it is bound to.
+ * 3. Delete any code in the editor, paste this entire file, and Save (Ctrl+S).
+ * 4. In the toolbar function picker choose "setupMicroTaskingSheet", then click "Run".
+ * 5. First run only: an "Authorization required" dialog appears. Review permissions -> pick your
+ *    account -> "Advanced" -> "Go to <project> (unsafe)" -> Allow. If nothing pops up, the
+ *    browser blocked the popup - allow popups for script.google.com and Run again.
+ * 6. It finishes in a few seconds and shows a toast in the Sheet. No add-ons or libraries are
+ *    needed, it works on a blank spreadsheet, and the Sheet needs no particular name.
+ *
+ * If "Running..." never ends: open Executions (clock icon, left sidebar) to see whether the run
+ * actually finished or errored. onEdit / syncRowCheckbox_ below are live-behavior triggers -
+ * don't run them by hand.
  */
 
 function setupMicroTaskingSheet() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  
+  if (!ss) {
+    throw new Error(
+      "No active spreadsheet. Open this from Extensions -> Apps Script inside your Sheet, " +
+      "not as a standalone script.google.com project."
+    );
+  }
+
   // 1. Create or select README tab (ALL CAPS)
   var readmeSheet = ss.getSheetByName("README") || ss.insertSheet("README", 0);
   readmeSheet.clear();
@@ -248,7 +263,10 @@ function setupMicroTaskingSheet() {
     ss.deleteSheet(sheet1);
   }
   
-  SpreadsheetApp.getUi().alert("MicroTasking Sheet Setup Complete! README and all 6 categories have been created.");
+  // toast(), not getUi().alert(): a toast is non-blocking and needs no UI context. alert() blocks
+  // waiting for a click in the *spreadsheet* tab, which looks exactly like the script "hanging"
+  // if you're still looking at the Apps Script editor.
+  ss.toast("README and all " + categories.length + " category tabs are ready.", "MicroTasking setup complete", 5);
 }
 
 /**
