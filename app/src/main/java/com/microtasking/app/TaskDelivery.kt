@@ -128,7 +128,8 @@ object TaskDelivery {
         var windowStartEpoch: Long,
         var backgroundPromptsEnabled: Boolean,
         var timeoutStreak: Int,
-        var lastOutcome: TaskLifecycleState
+        var lastOutcome: TaskLifecycleState,
+        var withinWindow: Boolean
     ) {
         fun persist(prefs: SharedPreferences) {
             prefs.edit()
@@ -141,6 +142,7 @@ object TaskDelivery {
                 .putBoolean("background_prompts_enabled", backgroundPromptsEnabled)
                 .putInt("timeout_streak", timeoutStreak)
                 .putString("last_outcome", lastOutcome.name)
+                .putBoolean("prompts_within_window", withinWindow)
                 .apply()
         }
     }
@@ -148,13 +150,15 @@ object TaskDelivery {
     /**
      * Reconciles persisted state against wall-clock reality. Three independent things can happen
      * here, matched to reality rather than to each other:
-     *  - Outside the active window with something still actionable left in the queue: that
-     *    leftover is abandoned (scored the same as a manual Abandon), the streak resets, and the
-     *    queue is automatically turned off (backgroundPromptsEnabled = false) - this is what "the
-     *    window closed" means. It's a one-shot trigger keyed off there being actionable work left
-     *    to clear, not off "currently outside the window" directly - so it fires exactly once per
-     *    close, and doesn't keep re-firing (and re-clobbering a manual Resume pressed afterward -
-     *    see below) on every later reconcile call while still outside the window.
+     *  - The active window just closed (we were inside it on the previous reconcile, now we're
+     *    not): anything still actionable in the queue is abandoned (scored the same as a manual
+     *    Abandon), the streak resets, and the queue is automatically turned off
+     *    (backgroundPromptsEnabled = false) - this is what "the window closed" means. Keyed off
+     *    the inside->outside *transition*, not off "currently outside the window" - otherwise a
+     *    manual Resume driving the queue outside the configured window (for testing) would have
+     *    each freshly-delivered task abandoned and delivery flipped back off one tick later, on
+     *    every tick. Because it's transition-keyed it also fires exactly once per close and won't
+     *    re-clobber a manual Resume pressed afterward (see below).
      *  - The calendar day has changed since the delivery count was last reset: the daily count
      *    resets to 0, and so does the streak - a streak is a daily thing, and rolling into a new
      *    day always starts it fresh even if nothing was technically abandoned (e.g. an
@@ -170,6 +174,10 @@ object TaskDelivery {
      * automatic transition touches it.
      */
     private fun reconcileState(prefs: SharedPreferences, settings: Settings, now: LocalDateTime): ReconciledState {
+        val withinWindow = isWithinActiveWindow(now, settings.startHour, settings.endHour)
+        // Defaults to the current membership so a fresh install (or an upgrade that predates this
+        // key) never reads as a spurious just-closed transition on its first reconcile.
+        val wasWithinWindow = prefs.getBoolean("prompts_within_window", withinWindow)
         val state = ReconciledState(
             queue = readTaskQueue(prefs.getString("task_queue", "[]") ?: "[]"),
             streak = prefs.getInt("streak", 0),
@@ -181,14 +189,17 @@ object TaskDelivery {
             timeoutStreak = prefs.getInt("timeout_streak", 0),
             lastOutcome = runCatching {
                 TaskLifecycleState.valueOf(prefs.getString("last_outcome", TaskLifecycleState.COMPLETED.name)!!)
-            }.getOrDefault(TaskLifecycleState.COMPLETED)
+            }.getOrDefault(TaskLifecycleState.COMPLETED),
+            withinWindow = withinWindow
         )
 
-        if (!isWithinActiveWindow(now, settings.startHour, settings.endHour) && state.queue.any { it.isActionable() }) {
-            state.queue = state.queue.map { if (it.isActionable()) it.abandon() else it }
-            state.streak = 0
-            state.timeoutStreak = 0
-            state.lastOutcome = TaskLifecycleState.ABANDONED
+        if (wasWithinWindow && !withinWindow) {
+            if (state.queue.any { it.isActionable() }) {
+                state.queue = state.queue.map { if (it.isActionable()) it.abandon() else it }
+                state.streak = 0
+                state.timeoutStreak = 0
+                state.lastOutcome = TaskLifecycleState.ABANDONED
+            }
             state.backgroundPromptsEnabled = false
         }
 
