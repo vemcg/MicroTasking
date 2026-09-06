@@ -319,12 +319,13 @@ fun MicroTaskingApp(
             isImportingSheet = false
             val importedTasks = result.tasks
             if (importedTasks.isNotEmpty()) {
-                savedManagedTasks = importedTasks + savedManagedTasks.filter { task ->
-                    task.category !in importedTasks.map { it.category }
-                }
+                savedManagedTasks = mergeImportedManagedTasks(importedTasks, savedManagedTasks)
                 onManagedTasksSaved(savedManagedTasks)
                 val categoryCount = importedTasks.map { it.category }.distinct().size
-                sheetImportMessage = "Imported ${importedTasks.size} tasks across $categoryCount categories."
+                val enabledCount = importedTasks.count { it.enabled }
+                sheetImportMessage =
+                    "Imported ${importedTasks.size} tasks across $categoryCount categories " +
+                    "($enabledCount checked and active)."
             } else if (result.tabNames.isNotEmpty()) {
                 sheetImportMessage = "Found tabs (${result.tabNames.joinToString(", ")}) but no task rows in them. " +
                     "Check that row 1 of each tab has a \"description\" column header."
@@ -1410,38 +1411,75 @@ fun normalizeGoogleSheetCsvUrl(rawUrl: String): String {
     }.getOrDefault(trimmed)
 }
 
+/**
+ * Splits one CSV line into fields, honoring `"`-quoted fields: a comma inside quotes is literal
+ * and `""` is an escaped quote. Doesn't span newlines (callers work line by line), so a sheet
+ * cell containing a literal newline won't round-trip - every description the app uses is a single
+ * line, so that's fine.
+ */
+fun splitCsvLine(line: String): List<String> {
+    val fields = mutableListOf<String>()
+    val field = StringBuilder()
+    var inQuotes = false
+    var i = 0
+    while (i < line.length) {
+        val c = line[i]
+        when {
+            c == '"' && inQuotes && i + 1 < line.length && line[i + 1] == '"' -> {
+                field.append('"')
+                i++
+            }
+            c == '"' -> inQuotes = !inQuotes
+            c == ',' && !inQuotes -> {
+                fields.add(field.toString())
+                field.setLength(0)
+            }
+            else -> field.append(c)
+        }
+        i++
+    }
+    fields.add(field.toString())
+    return fields.map { it.trim() }
+}
+
 fun parseExternalTaskCsv(csvText: String, categoryName: String): List<ManagedTask> {
     if (csvText.isBlank()) return emptyList()
 
     val rows = csvText.lineSequence()
         .map { it.trim() }
         .filter { it.isNotBlank() }
-        .map { row ->
-            val cells = row.split(",").map { value ->
-                value.trim().removeSurrounding("\"", "\"").trim()
-            }
-            cells
-        }
+        .map { splitCsvLine(it) }
         .toList()
 
     if (rows.isEmpty()) return emptyList()
 
+    // Column A is always the per-row enabled toggle - a bare checkbox with no header text. The
+    // description and link columns are still found by header name so extra columns or a reordering
+    // don't break the import.
     val header = rows.first().map { it.lowercase() }
     val descriptionIndex = header.indexOfFirst { it.contains("description") }
-    val enabledIndex = header.indexOfFirst { it.contains("checkbox") || it.contains("enabled") }
     val linkIndex = header.indexOfFirst { it.contains("link") || it.contains("url") }
-
     if (descriptionIndex == -1) return emptyList()
 
-    return rows.drop(1).mapNotNull { row ->
-        if (row.size <= descriptionIndex) return@mapNotNull null
+    val dataRows = rows.drop(1)
+    // A Google Sheets checkbox exports as "TRUE"/"FALSE"; a cell with no checkbox exports blank.
+    // If any data row has a checkbox in column A, column A is authoritative and a blank there means
+    // disabled. If the tab has no checkboxes at all (a sheet from before this convention), import
+    // everything as enabled so nobody silently loses their pool.
+    val columnA = dataRows.map { it.firstOrNull()?.lowercase().orEmpty() }
+    val tabUsesCheckboxes = columnA.any { it == "true" || it == "false" }
+
+    return dataRows.mapIndexedNotNull { index, row ->
+        if (row.size <= descriptionIndex) return@mapIndexedNotNull null
         val description = row[descriptionIndex].trim()
-        if (description.isEmpty()) return@mapNotNull null
-        val enabled = row.getOrNull(enabledIndex)?.equals("true", ignoreCase = true)
-            ?: true
+        if (description.isEmpty()) return@mapIndexedNotNull null
+        val enabled = if (tabUsesCheckboxes) columnA[index] == "true" else true
         val link = row.getOrNull(linkIndex).orEmpty().trim()
         ManagedTask(
-            id = "external-${categoryName}-${description.hashCode()}-${System.currentTimeMillis()}",
+            // Deterministic so a re-sync updates the same task (and keeps its in-app flags - see
+            // mergeImportedManagedTasks) instead of duplicating it. Editing a description in the
+            // sheet therefore reads as remove-old + add-new, which is the honest outcome.
+            id = "external-$categoryName-$description",
             description = description,
             category = categoryName,
             durationMinutes = 5,

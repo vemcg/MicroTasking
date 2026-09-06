@@ -120,6 +120,30 @@ fun writeManagedTasks(tasks: List<ManagedTask>): String = JSONArray().apply {
     tasks.forEach { put(managedTaskToJson(it)) }
 }.toString()
 
+/**
+ * Folds a fresh sheet import into the existing pool. Every category present in [imported] is
+ * replaced wholesale by what the sheet now says; categories the import doesn't mention are left
+ * untouched. For a task that still exists after the import (same [ManagedTask.id]), the sheet is
+ * authoritative for [ManagedTask.enabled] - its column-A checkbox is the source of truth - but the
+ * flags the user set in the app's Task Pool screen ([ManagedTask.neverSuggest],
+ * [ManagedTask.temporarilyUnavailable]) are carried over so a re-sync doesn't silently undo them.
+ */
+fun mergeImportedManagedTasks(
+    imported: List<ManagedTask>,
+    existing: List<ManagedTask>
+): List<ManagedTask> {
+    val priorById = existing.associateBy { it.id }
+    val importedCategories = imported.map { it.category }.toSet()
+    val reconciled = imported.map { task ->
+        val prior = priorById[task.id] ?: return@map task
+        task.copy(
+            neverSuggest = prior.neverSuggest,
+            temporarilyUnavailable = prior.temporarilyUnavailable
+        )
+    }
+    return reconciled + existing.filter { it.category !in importedCategories }
+}
+
 private fun JSONObject.optNullableLong(key: String): Long? =
     if (has(key) && !isNull(key)) getLong(key) else null
 

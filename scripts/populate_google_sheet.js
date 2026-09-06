@@ -28,7 +28,7 @@ function setupMicroTaskingSheet() {
     ["   - You can add new tabs, rename existing tabs, or delete tabs you don't need."],
     [""],
     ["2. COLUMNS IN TASK TABS:"],
-    ["   - Column A (Master Toggle / Enabled): A1 toggles all rows in the tab; each row below also has its own independent checkbox."],
+    ["   - Column A (Enabled): each task row has a checkbox. Checked = the app may suggest it; unchecked = still imported, but never suggested. Typing a description in column B adds the checkbox automatically; clearing the description removes it. Cell A1 is the master toggle for the whole tab."],
     ["   - Column B (Description): The text description of the micro-task."],
     ["   - Column C (Link): Optional URL (e.g. video tutorial, document, or web tool)."],
     [""],
@@ -210,10 +210,11 @@ function setupMicroTaskingSheet() {
     sheet.clear();
     
     // Set headers. A1 is the master toggle; rows 2+ are independent, but can all be synced together.
-    sheet.getRange("A1").setValue(true).insertCheckboxes();
-    sheet.getRange("A1").setFontWeight("bold");
-    sheet.getRange("B1").setValue("description").setFontWeight("bold");
-    sheet.getRange("C1").setValue("link").setFontWeight("bold");
+    sheet.getRange("A1").insertCheckboxes();
+    sheet.getRange("A1").setValue(true);
+    sheet.getRange("B1").setValue("Description");
+    sheet.getRange("C1").setValue("Link");
+    sheet.getRange("A1:C1").setFontWeight("bold").setHorizontalAlignment("center");
     
     var numTasks = cat.tasks.length;
     if (numTasks > 0) {
@@ -250,18 +251,51 @@ function setupMicroTaskingSheet() {
   SpreadsheetApp.getUi().alert("MicroTasking Sheet Setup Complete! README and all 6 categories have been created.");
 }
 
+/**
+ * Live sheet behavior. This is a simple onEdit trigger: it runs only while the sheet is open in
+ * a browser and edited by someone with edit access - never for the app's CSV read, and not
+ * reliably on mobile. Two things:
+ *   - A1 is the tab's master toggle: flipping it sets every row checkbox below to match.
+ *   - Column B is the description: typing a description into a row with no checkbox adds one
+ *     (checked); clearing the description (trimmed empty) removes that row's checkbox.
+ * Script-driven cell writes don't re-fire onEdit, so the A1 fan-out below can't loop.
+ */
 function onEdit(e) {
+  if (!e || !e.range) return;
   var range = e.range;
   var sheet = range.getSheet();
-  if (!sheet) return;
+  if (!sheet || sheet.getName() === "README") return;
 
-  if (range.getA1Notation() !== "A1") return;
+  // Master toggle in A1.
+  if (range.getColumn() === 1 && range.getRow() === 1) {
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 2) return;
+    var count = lastRow - 1;
+    sheet.getRange(2, 1, count, 1).setValues(Array(count).fill([Boolean(range.getValue())]));
+    return;
+  }
 
-  var value = range.getValue();
-  var lastRow = sheet.getLastRow();
-  if (lastRow < 2) return;
+  // Description column (B), data rows only - also covers a multi-row paste.
+  if (range.getColumn() <= 2 && range.getLastColumn() >= 2) {
+    for (var row = Math.max(2, range.getRow()); row <= range.getLastRow(); row++) {
+      syncRowCheckbox_(sheet, row);
+    }
+  }
+}
 
-  var rowCount = lastRow - 1;
-  var toggleRange = sheet.getRange(2, 1, rowCount, 1);
-  toggleRange.setValues(Array(rowCount).fill([Boolean(value)]));
+/** Adds or removes row `row`'s column-A checkbox to match whether column B holds a description. */
+function syncRowCheckbox_(sheet, row) {
+  var toggleCell = sheet.getRange(row, 1);
+  var hasDescription = String(sheet.getRange(row, 2).getValue()).trim().length > 0;
+  var rule = toggleCell.getDataValidation();
+  var isCheckbox = rule != null &&
+    rule.getCriteriaType() === SpreadsheetApp.DataValidationCriteria.CHECKBOX;
+
+  if (hasDescription && !isCheckbox) {
+    toggleCell.insertCheckboxes();
+    toggleCell.setValue(true);
+  } else if (!hasDescription && isCheckbox) {
+    toggleCell.removeCheckboxes();
+    toggleCell.clearContent();
+  }
 }
