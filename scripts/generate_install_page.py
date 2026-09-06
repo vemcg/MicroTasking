@@ -116,14 +116,26 @@ def main() -> None:
 
     display_version = short_display_version(args.version)
 
-    make_qr_with_logo(args.url, display_version, out_dir / "qr.png")
+    # Version-stamp the QR image filenames. GitHub Pages (and its CDN, and the browser) cache by
+    # path, so a fixed "qr.png" gets served stale next to a freshly regenerated download button -
+    # the QR then encodes/shows an older version than the button. A unique name per build always
+    # misses the cache. peaceiris/actions-gh-pages wipes files not in the publish dir on every
+    # deploy, so superseded qr-*.png don't accumulate.
+    def qr_filename(prefix: str, version: str) -> str:
+        slug = re.sub(r"[^A-Za-z0-9._-]+", "-", version.lstrip("v")).strip("-") or "build"
+        return f"{prefix}-{slug}.png"
+
+    qr_name = qr_filename("qr", display_version)
+    make_qr_with_logo(args.url, display_version, out_dir / qr_name)
 
     # Only show a second, side-by-side QR code when this build is off a non-main branch and
     # we actually found a prior main release to point at - main builds still get a single QR.
     show_main_qr = bool(args.main_url) and args.branch != "main"
     main_display_version = short_display_version(args.main_version) if args.main_version else ""
+    main_qr_name = ""
     if show_main_qr:
-        make_qr_with_logo(args.main_url, main_display_version, out_dir / "qr-main.png")
+        main_qr_name = qr_filename("qr-main", main_display_version)
+        make_qr_with_logo(args.main_url, main_display_version, out_dir / main_qr_name)
 
     def qr_block(url: str, version: str, img_name: str, label: str = "") -> str:
         label_html = f'<div class="qr-label">{label}</div>' if label else ""
@@ -138,8 +150,8 @@ def main() -> None:
 
     if show_main_qr:
         qr_section_html = f"""<div class="qr-row">
-            {qr_block(args.main_url, main_display_version, "qr-main.png", "Stable Release")}
-            {qr_block(args.url, display_version, "qr.png", args.branch)}
+            {qr_block(args.main_url, main_display_version, main_qr_name, "Stable Release")}
+            {qr_block(args.url, display_version, qr_name, args.branch)}
           </div>"""
         scan_target = "the <strong>Stable Release</strong> QR code (on the left) below"
         qr_guidance_html = (
@@ -151,7 +163,7 @@ def main() -> None:
             'works at all.</p>'
         )
     else:
-        qr_section_html = qr_block(args.url, display_version, "qr.png")
+        qr_section_html = qr_block(args.url, display_version, qr_name)
         scan_target = "the QR code below"
         qr_guidance_html = ""
 
