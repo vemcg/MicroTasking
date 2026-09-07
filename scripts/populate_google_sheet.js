@@ -15,8 +15,11 @@
  * 6. It finishes in a few seconds and shows a toast in the Sheet. No add-ons or libraries are
  *    needed, it works on a blank spreadsheet, and the Sheet needs no particular name.
  *
+ * Running setupMicroTaskingSheet also installs an onChange trigger (so new tabs get their header
+ * row automatically) - the authorization prompt will mention managing triggers because of it.
+ *
  * If "Running..." never ends: open Executions (clock icon, left sidebar) to see whether the run
- * actually finished or errored. onEdit / syncRowCheckbox_ below are live-behavior triggers -
+ * actually finished or errored. onEdit / onGridChange_ / syncRowCheckbox_ below are triggers -
  * don't run them by hand.
  *
  * MAINTAINER NOTE: this file is the source of truth and is pushed to the bound Apps Script
@@ -242,14 +245,10 @@ function setupMicroTaskingSheet() {
     var cat = categories[c];
     var sheet = ss.getSheetByName(cat.name) || ss.insertSheet(cat.name);
     sheet.clear();
-    
-    // Set headers. A1 is the master toggle; rows 2+ are independent, but can all be synced together.
-    sheet.getRange("A1").insertCheckboxes();
-    sheet.getRange("A1").setValue(true);
-    sheet.getRange("B1").setValue("Description");
-    sheet.getRange("C1").setValue("Link");
-    sheet.getRange("A1:C1").setFontWeight("bold").setHorizontalAlignment("center");
-    
+
+    // A1 is the master toggle; rows 2+ are independent, but can all be synced together.
+    applyCategoryTabHeader_(sheet);
+
     var numTasks = cat.tasks.length;
     if (numTasks > 0) {
       // Set Column B (description) and Column C (link)
@@ -270,10 +269,6 @@ function setupMicroTaskingSheet() {
         checkboxRange.setValues(Array(numTasks).fill([false]));
       }
     }
-    
-    sheet.setColumnWidth(1, 40);
-    sheet.setColumnWidth(2, 500);
-    sheet.setColumnWidth(3, 250);
   }
 
   // Delete default Sheet1 if present
@@ -281,11 +276,59 @@ function setupMicroTaskingSheet() {
   if (sheet1 && ss.getSheets().length > 1) {
     ss.deleteSheet(sheet1);
   }
-  
+
+  // onEdit can't see a tab being added, so an installable onChange trigger headers new tabs.
+  ensureTriggers_();
+
   // toast(), not getUi().alert(): a toast is non-blocking and needs no UI context. alert() blocks
   // waiting for a click in the *spreadsheet* tab, which looks exactly like the script "hanging"
   // if you're still looking at the Apps Script editor.
   ss.toast("README and all " + categories.length + " category tabs are ready.", "MicroTasking setup complete", 5);
+}
+
+/**
+ * Writes the standard category-tab header and column widths: A1 = master checkbox (checked),
+ * B1 = "Description", C1 = "Link", header row bold + centered, columns sized 40 / 500 / 250.
+ * Idempotent - safe to re-run on a tab that already has it.
+ */
+function applyCategoryTabHeader_(sheet) {
+  sheet.getRange("A1").insertCheckboxes();
+  sheet.getRange("A1").setValue(true);
+  sheet.getRange("B1").setValue("Description");
+  sheet.getRange("C1").setValue("Link");
+  sheet.getRange("A1:C1").setFontWeight("bold").setHorizontalAlignment("center");
+  sheet.setColumnWidth(1, 40);
+  sheet.setColumnWidth(2, 500);
+  sheet.setColumnWidth(3, 250);
+}
+
+/**
+ * Installable onChange handler (installed by setupMicroTaskingSheet via ensureTriggers_). onEdit
+ * never fires for a sheet being inserted, so this fills in the header row + column widths on any
+ * freshly added tab. Runs on every structural change; cheap and idempotent, so it just re-headers
+ * whichever non-README tab is still missing its "Description" header.
+ */
+function onGridChange_(e) {
+  if (!e || e.changeType !== "INSERT_GRID") return;
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  ss.getSheets().forEach(function (sheet) {
+    if (sheet.getName() === "README") return;
+    if (String(sheet.getRange("B1").getValue()).trim() === "Description") return;
+    applyCategoryTabHeader_(sheet);
+  });
+}
+
+/** Idempotently installs the spreadsheet onChange trigger that onGridChange_ needs. */
+function ensureTriggers_() {
+  var installed = ScriptApp.getProjectTriggers().some(function (t) {
+    return t.getHandlerFunction() === "onGridChange_";
+  });
+  if (!installed) {
+    ScriptApp.newTrigger("onGridChange_")
+      .forSpreadsheet(SpreadsheetApp.getActiveSpreadsheet())
+      .onChange()
+      .create();
+  }
 }
 
 /**
@@ -295,7 +338,8 @@ function setupMicroTaskingSheet() {
  *   - A1 is the tab's master toggle: flipping it sets every row checkbox below to match.
  *   - Column B is the description: typing a description into a row with no checkbox adds one
  *     (checked); clearing the description (trimmed empty) removes that row's checkbox.
- * Script-driven cell writes don't re-fire onEdit, so the A1 fan-out below can't loop.
+ * Script-driven cell writes don't re-fire onEdit, so the A1 fan-out below can't loop. Adding a
+ * whole new tab is handled separately by onGridChange_ (an installable onChange trigger).
  */
 function onEdit(e) {
   if (!e || !e.range) return;
