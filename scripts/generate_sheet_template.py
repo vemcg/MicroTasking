@@ -13,6 +13,7 @@ removing a row's checkbox as its description is typed or cleared - lives in the 
 Script (scripts/populate_google_sheet.js), which the user runs against their own copy.
 """
 import argparse
+import datetime
 import json
 import pathlib
 
@@ -22,8 +23,12 @@ from openpyxl.worksheet.hyperlink import Hyperlink
 
 INVALID_SHEET_TITLE_CHARS = str.maketrans({c: "-" for c in "/\\?*[]:"})
 
+# Origin version of this template. Keep in sync with buildVersionBase in app/build.gradle.kts.
+TEMPLATE_VERSION = "0.1.7"
+
 README_CONTENT = [
     ["MICROTASKING TASK POOL TEMPLATE"],
+    [f"Template version: {TEMPLATE_VERSION}  (generated {datetime.date.today().isoformat()})"],
     [""],
     ["Welcome to your MicroTasking Task Pool spreadsheet!"],
     [""],
@@ -58,8 +63,11 @@ def main() -> None:
     workbook.remove(workbook.active)
 
     readme_sheet = workbook.create_sheet(title="README")
-    for row in README_CONTENT:
+    for index, row in enumerate(README_CONTENT):
         readme_sheet.append(row)
+        # Bold the title, the version stamp, and every section heading (rows ending with a colon).
+        if index < 2 or row[0].rstrip().endswith(":"):
+            readme_sheet.cell(row=index + 1, column=1).font = HEADER_FONT
     readme_sheet.column_dimensions["A"].width = 110
 
     for category in data["categories"]:

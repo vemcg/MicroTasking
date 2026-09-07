@@ -20,6 +20,9 @@
  * don't run them by hand.
  */
 
+// Origin version of this template. Keep in sync with buildVersionBase in app/build.gradle.kts.
+var TEMPLATE_VERSION = "0.1.7";
+
 function setupMicroTaskingSheet() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   if (!ss) {
@@ -29,12 +32,18 @@ function setupMicroTaskingSheet() {
     );
   }
 
+  // Name the spreadsheet after the template version so a given copy's origin is identifiable.
+  ss.rename("MicroTasking Task Pool Template v" + TEMPLATE_VERSION);
+
+  var today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd");
+
   // 1. Create or select README tab (ALL CAPS)
   var readmeSheet = ss.getSheetByName("README") || ss.insertSheet("README", 0);
   readmeSheet.clear();
-  
+
   var readmeData = [
     ["MICROTASKING TASK POOL TEMPLATE"],
+    ["Template version: " + TEMPLATE_VERSION + "  (set up " + today + ")"],
     [""],
     ["Welcome to your MicroTasking Task Pool spreadsheet!"],
     [""],
@@ -54,10 +63,14 @@ function setupMicroTaskingSheet() {
   ];
   
   readmeSheet.getRange(1, 1, readmeData.length, 1).setValues(readmeData);
-  readmeSheet.getRange("A1").setFontWeight("bold").setFontSize(14);
-  readmeSheet.getRange("A5").setFontWeight("bold");
-  readmeSheet.getRange("A10").setFontWeight("bold");
-  readmeSheet.getRange("A16").setFontWeight("bold");
+  // Bold the title, the version stamp, and every section heading (the rows that end with a colon)
+  // - matched by content so inserting a line above doesn't silently shift the wrong rows bold.
+  for (var r = 0; r < readmeData.length; r++) {
+    if (r < 2 || /:\s*$/.test(readmeData[r][0])) {
+      readmeSheet.getRange(r + 1, 1).setFontWeight("bold");
+    }
+  }
+  readmeSheet.getRange("A1").setFontSize(14);
   readmeSheet.autoResizeColumn(1);
 
   // Categories data

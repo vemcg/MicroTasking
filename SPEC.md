@@ -143,7 +143,10 @@ deliberate — just do the task immediately.
   `scripts/generate_sheet_template.py` from `content/tasks.json`) — one tab per seed category,
   column A = enabled checkbox, column B = `Description`, column C = `Link` (bold, centered
   headers), ready to upload to Google Drive as a starting point. Re-run the script after editing
-  `content/tasks.json` to regenerate it. The live sheet behavior (A1 master toggle; a row's
+  `content/tasks.json` to regenerate it. Both the builder and the Apps Script carry a
+  `TEMPLATE_VERSION` constant (kept in sync with `buildVersionBase`): README row 2 is stamped
+  `Template version: <v> (…date…)`, and the Apps Script also renames the bound spreadsheet to
+  `MicroTasking Task Pool Template v<v>`. The live sheet behavior (A1 master toggle; a row's
   checkbox appearing when its description is typed and disappearing when it's cleared) is in the
   bundled Apps Script `scripts/populate_google_sheet.js`, which the user runs against their copy.
 - **How tabs are read**: a one-time Sheets API v4 metadata call (`spreadsheets.get`) lists
