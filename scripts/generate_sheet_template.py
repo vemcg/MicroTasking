@@ -37,7 +37,7 @@ README_CONTENT = [
     ["   - You can add new tabs, rename existing tabs, or delete tabs you don't need."],
     [""],
     ["2. COLUMNS IN TASK TABS:"],
-    ["   - Column A (Enabled): each task row has a checkbox. Checked = the app may suggest it; unchecked = still imported, but never suggested. Typing a description in column B adds the checkbox automatically; clearing the description removes it. Cell A1 is the master toggle for the whole tab."],
+    ["   - Column A (Enabled): each task row has a checkbox. Checked = the app may suggest it; unchecked = still imported, but never suggested. Typing a description in column B adds the checkbox automatically; clearing a row's description deletes the whole row. Cell A1 is the master toggle for the whole tab."],
     ["   - Column B (Description): The text description of the micro-task."],
     ["   - Column C (Link): Optional URL (e.g. video tutorial, document, or web tool)."],
     [""],

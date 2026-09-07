@@ -19,7 +19,7 @@
  * row automatically) - the authorization prompt will mention managing triggers because of it.
  *
  * If "Running..." never ends: open Executions (clock icon, left sidebar) to see whether the run
- * actually finished or errored. onEdit / onGridChange_ / syncRowCheckbox_ below are triggers -
+ * actually finished or errored. onEdit / onGridChange_ / addRowCheckbox_ below are triggers -
  * don't run them by hand.
  *
  * MAINTAINER NOTE: this file is the source of truth and is pushed to the bound Apps Script
@@ -61,7 +61,7 @@ function setupMicroTaskingSheet() {
     ["   - You can add new tabs, rename existing tabs, or delete tabs you don't need."],
     [""],
     ["2. COLUMNS IN TASK TABS:"],
-    ["   - Column A (Enabled): each task row has a checkbox. Checked = the app may suggest it; unchecked = still imported, but never suggested. Typing a description in column B adds the checkbox automatically; clearing the description removes it. Cell A1 is the master toggle for the whole tab."],
+    ["   - Column A (Enabled): each task row has a checkbox. Checked = the app may suggest it; unchecked = still imported, but never suggested. Typing a description in column B adds the checkbox automatically; clearing a row's description deletes the whole row. Cell A1 is the master toggle for the whole tab."],
     ["   - Column B (Description): The text description of the micro-task."],
     ["   - Column C (Link): Optional URL (e.g. video tutorial, document, or web tool)."],
     [""],
@@ -337,7 +337,8 @@ function ensureTriggers_() {
  * reliably on mobile. Two things:
  *   - A1 is the tab's master toggle: flipping it sets every row checkbox below to match.
  *   - Column B is the description: typing a description into a row with no checkbox adds one
- *     (checked); clearing the description (trimmed empty) removes that row's checkbox.
+ *     (checked); clearing a row's description (trimmed empty) deletes the whole row - checkbox,
+ *     description, and link together - so the table stays gap-free.
  * Script-driven cell writes don't re-fire onEdit, so the A1 fan-out below can't loop. Adding a
  * whole new tab is handled separately by onGridChange_ (an installable onChange trigger).
  */
@@ -356,27 +357,32 @@ function onEdit(e) {
     return;
   }
 
-  // Description column (B), data rows only - also covers a multi-row paste.
+  // Description column (B), data rows only - also covers a multi-row paste or block-clear.
   if (range.getColumn() <= 2 && range.getLastColumn() >= 2) {
+    var clearedRows = [];
     for (var row = Math.max(2, range.getRow()); row <= range.getLastRow(); row++) {
-      syncRowCheckbox_(sheet, row);
+      if (String(sheet.getRange(row, 2).getValue()).trim().length > 0) {
+        addRowCheckbox_(sheet, row);
+      } else {
+        clearedRows.push(row);
+      }
+    }
+    // Delete emptied rows bottom-up so earlier deletions don't shift the ones still to go.
+    clearedRows.sort(function (a, b) { return b - a; });
+    for (var i = 0; i < clearedRows.length; i++) {
+      if (clearedRows[i] >= 2) sheet.deleteRow(clearedRows[i]);
     }
   }
 }
 
-/** Adds or removes row `row`'s column-A checkbox to match whether column B holds a description. */
-function syncRowCheckbox_(sheet, row) {
+/** Ensures row `row` has a checked column-A checkbox (used when a description is first typed). */
+function addRowCheckbox_(sheet, row) {
   var toggleCell = sheet.getRange(row, 1);
-  var hasDescription = String(sheet.getRange(row, 2).getValue()).trim().length > 0;
   var rule = toggleCell.getDataValidation();
   var isCheckbox = rule != null &&
     rule.getCriteriaType() === SpreadsheetApp.DataValidationCriteria.CHECKBOX;
-
-  if (hasDescription && !isCheckbox) {
+  if (!isCheckbox) {
     toggleCell.insertCheckboxes();
     toggleCell.setValue(true);
-  } else if (!hasDescription && isCheckbox) {
-    toggleCell.removeCheckboxes();
-    toggleCell.clearContent();
   }
 }
