@@ -138,7 +138,7 @@ jobs:
             --branch "${{ steps.version.outputs.git_branch }}" \
             --main-url "${{ steps.mainrelease.outputs.main_url }}" \
             --main-version "${{ steps.mainrelease.outputs.main_tag }}" \
-            --template-url "https://docs.google.com/spreadsheets/d/1Ss15J7afOl3HON6h2dI8f8hGi8JYjH0hRywuV0nCYOg/edit?usp=sharing" \
+            --template-url "https://docs.google.com/spreadsheets/d/1YZNQxZlzj8Xj4Bya2v8YEiq01n6jseD3JZSr7BlThJo/edit?usp=sharing" \
             --out docs
 
       - name: Deploy install page to GitHub Pages

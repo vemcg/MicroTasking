@@ -94,7 +94,7 @@ def main() -> None:
     parser.add_argument("--main-version", default="", help="Release tag/version label for the latest main release")
     parser.add_argument(
         "--template-url",
-        default="https://docs.google.com/spreadsheets/d/1Ss15J7afOl3HON6h2dI8f8hGi8JYjH0hRywuV0nCYOg/edit?usp=sharing",
+        default="https://docs.google.com/spreadsheets/d/1YZNQxZlzj8Xj4Bya2v8YEiq01n6jseD3JZSr7BlThJo/edit?usp=sharing",
         help="Google Sheet template URL",
     )
     parser.add_argument("--out", default="docs", help="Output directory")

@@ -145,10 +145,12 @@ deliberate — just do the task immediately.
   headers), ready to upload to Google Drive as a starting point. Re-run the script after editing
   `content/tasks.json` to regenerate it. Both the builder and the Apps Script carry a
   `TEMPLATE_VERSION` constant (kept in sync with `buildVersionBase`): README row 2 is stamped
-  `Template version: <v> (…date…)`, and the Apps Script also renames the bound spreadsheet to
-  `MicroTasking Task Pool Template v<v>`. The live sheet behavior (A1 master toggle; a row's
+  `Template version: <v> (…date…)`; the spreadsheet's own title stays plain
+  `MicroTasking Task Pool Template`. The live sheet behavior (A1 master toggle; a row's
   checkbox appearing when its description is typed and disappearing when it's cleared) is in the
-  bundled Apps Script `scripts/populate_google_sheet.js`, which the user runs against their copy.
+  bundled Apps Script `scripts/populate_google_sheet.js`. That script is the source of truth for
+  the shared template Sheet and is pushed to its bound project with `npm run push:sheet` (clasp);
+  users who copy the template still paste it into their copy by hand.
 - **How tabs are read**: a one-time Sheets API v4 metadata call (`spreadsheets.get`) lists
   every tab's title + internal `gid`, using a Google Cloud API key restricted to the Sheets
   API and to this app's package name + signing-cert SHA-1 (locked to the checked-in debug

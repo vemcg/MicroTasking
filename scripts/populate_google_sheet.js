@@ -37,8 +37,9 @@ function setupMicroTaskingSheet() {
     );
   }
 
-  // Name the spreadsheet after the template version so a given copy's origin is identifiable.
-  ss.rename("MicroTasking Task Pool Template v" + TEMPLATE_VERSION);
+  // Keep the spreadsheet's own name stable ("MicroTasking Task Pool Template"); the version
+  // lives in README row 2, not the title.
+  ss.rename("MicroTasking Task Pool Template");
 
   var today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd");
 
