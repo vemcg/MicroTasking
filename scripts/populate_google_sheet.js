@@ -50,6 +50,7 @@ function setupMicroTaskingSheet() {
   var readmeSheet = ss.getSheetByName("README") || ss.insertSheet("README", 0);
   readmeSheet.clear();
 
+  // Keep this text in sync with README_CONTENT in scripts/generate_sheet_template.py.
   var readmeData = [
     ["MICROTASKING TASK POOL TEMPLATE"],
     ["Template version: " + TEMPLATE_VERSION + "  (set up " + today + ")"],
@@ -57,20 +58,24 @@ function setupMicroTaskingSheet() {
     ["Welcome to your MicroTasking Task Pool spreadsheet!"],
     [""],
     ["HOW TO USE THIS SPREADSHEET:"],
-    ["1. CATEGORIES (TABS): Each tab at the bottom represents a category (e.g. Decluttering, Cleaning, Paperwork, Finances, Health, Errands)."],
-    ["   - You can add new tabs, rename existing tabs, or delete tabs you don't need."],
+    [""],
+    ["1. CATEGORIES (TABS):"],
+    ["   - Each tab at the bottom is a category (e.g. Decluttering, Cleaning, Paperwork, Finances, Health, Errands)."],
+    ["   - You can add, rename, delete, and rearrange tabs."],
+    ["   - Tab order sets the odds: tasks in your leftmost enabled category are about twice as likely to be assigned as tasks in your rightmost enabled category, sliding linearly in between. Enable or disable categories in the app's settings."],
     [""],
     ["2. COLUMNS IN TASK TABS:"],
     ["   - Column A (Enabled): each task row has a checkbox. Checked = the app may suggest it; unchecked = still imported, but never suggested. Typing a description in column B adds the checkbox automatically; clearing a row's description deletes the whole row. Cell A1 is the master toggle for the whole tab."],
     ["   - Column B (Description): The text description of the micro-task."],
     ["   - Column C (Link): Optional URL (e.g. video tutorial, document, or web tool)."],
+    ["   - The order of task rows within a tab does not affect how often a task is assigned."],
     [""],
     ["3. SYNCING WITH THE APP:"],
     ["   - Set Share permissions to 'Anyone with the link can view'."],
     ["   - Paste your Sheet URL into the onboarding page to generate your custom QR code."],
     ["   - In the MicroTasking app, tap Settings -> Import External Task Pool -> Scan QR Code."]
   ];
-  
+
   readmeSheet.getRange(1, 1, readmeData.length, 1).setValues(readmeData);
   // Bold the title, the version stamp, and every section heading (the rows that end with a colon)
   // - matched by content so inserting a line above doesn't silently shift the wrong rows bold.
@@ -80,7 +85,10 @@ function setupMicroTaskingSheet() {
     }
   }
   readmeSheet.getRange("A1").setFontSize(14);
-  readmeSheet.autoResizeColumn(1);
+  // Fixed, on-screen-friendly width + wrap so every line shows in full instead of autoResize
+  // blowing the column out to the length of the longest sentence.
+  readmeSheet.setColumnWidth(1, 700);
+  readmeSheet.getRange(1, 1, readmeData.length, 1).setWrap(true);
 
   // Categories data
   var categories = [

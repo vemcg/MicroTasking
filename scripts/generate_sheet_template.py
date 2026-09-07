@@ -26,6 +26,7 @@ INVALID_SHEET_TITLE_CHARS = str.maketrans({c: "-" for c in "/\\?*[]:"})
 # Origin version of this template. Keep in sync with buildVersionBase in app/build.gradle.kts.
 TEMPLATE_VERSION = "0.1.7"
 
+# Keep this text in sync with readmeData in scripts/populate_google_sheet.js.
 README_CONTENT = [
     ["MICROTASKING TASK POOL TEMPLATE"],
     [f"Template version: {TEMPLATE_VERSION}  (generated {datetime.date.today().isoformat()})"],
@@ -33,13 +34,17 @@ README_CONTENT = [
     ["Welcome to your MicroTasking Task Pool spreadsheet!"],
     [""],
     ["HOW TO USE THIS SPREADSHEET:"],
-    ["1. CATEGORIES (TABS): Each tab at the bottom represents a category (e.g. Decluttering, Cleaning, Paperwork, Finances, Health, Errands)."],
-    ["   - You can add new tabs, rename existing tabs, or delete tabs you don't need."],
+    [""],
+    ["1. CATEGORIES (TABS):"],
+    ["   - Each tab at the bottom is a category (e.g. Decluttering, Cleaning, Paperwork, Finances, Health, Errands)."],
+    ["   - You can add, rename, delete, and rearrange tabs."],
+    ["   - Tab order sets the odds: tasks in your leftmost enabled category are about twice as likely to be assigned as tasks in your rightmost enabled category, sliding linearly in between. Enable or disable categories in the app's settings."],
     [""],
     ["2. COLUMNS IN TASK TABS:"],
     ["   - Column A (Enabled): each task row has a checkbox. Checked = the app may suggest it; unchecked = still imported, but never suggested. Typing a description in column B adds the checkbox automatically; clearing a row's description deletes the whole row. Cell A1 is the master toggle for the whole tab."],
     ["   - Column B (Description): The text description of the micro-task."],
     ["   - Column C (Link): Optional URL (e.g. video tutorial, document, or web tool)."],
+    ["   - The order of task rows within a tab does not affect how often a task is assigned."],
     [""],
     ["3. SYNCING WITH THE APP:"],
     ["   - Set Share permissions to 'Anyone with the link can view'."],
@@ -49,6 +54,7 @@ README_CONTENT = [
 
 HEADER_FONT = Font(bold=True)
 HEADER_ALIGNMENT = Alignment(horizontal="center")
+README_WRAP = Alignment(wrap_text=True, vertical="top")
 
 
 def main() -> None:
@@ -65,10 +71,13 @@ def main() -> None:
     readme_sheet = workbook.create_sheet(title="README")
     for index, row in enumerate(README_CONTENT):
         readme_sheet.append(row)
+        cell = readme_sheet.cell(row=index + 1, column=1)
+        cell.alignment = README_WRAP
         # Bold the title, the version stamp, and every section heading (rows ending with a colon).
         if index < 2 or row[0].rstrip().endswith(":"):
-            readme_sheet.cell(row=index + 1, column=1).font = HEADER_FONT
-    readme_sheet.column_dimensions["A"].width = 110
+            cell.font = HEADER_FONT
+    # Fixed, on-screen-friendly width; wrap (above) makes every line show in full.
+    readme_sheet.column_dimensions["A"].width = 95
 
     for category in data["categories"]:
         raw_name = category["name"]
