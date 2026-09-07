@@ -9,3 +9,7 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# clasp / Apps Script tooling (.clasp.json is committed - scriptId is not a secret)
+node_modules/
+.clasp-server.json

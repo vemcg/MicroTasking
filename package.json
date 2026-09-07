@@ -1,0 +1,14 @@
+{
+  "name": "microtasking-apps-script",
+  "version": "0.1.7",
+  "private": true,
+  "description": "clasp tooling for the MicroTasking Google Sheet template's bound Apps Script (scripts/populate_google_sheet.js). The Android app itself is Gradle/Kotlin and does not use npm.",
+  "scripts": {
+    "push:sheet": "clasp push --force",
+    "pull:sheet": "clasp pull",
+    "open:sheet": "clasp open --webapp=false"
+  },
+  "devDependencies": {
+    "@google/clasp": "^2.4.2"
+  }
+}

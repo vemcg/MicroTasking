@@ -18,6 +18,11 @@
  * If "Running..." never ends: open Executions (clock icon, left sidebar) to see whether the run
  * actually finished or errored. onEdit / syncRowCheckbox_ below are live-behavior triggers -
  * don't run them by hand.
+ *
+ * MAINTAINER NOTE: this file is the source of truth and is pushed to the bound Apps Script
+ * project of the shared template Sheet with `npm run push:sheet` (clasp). See .clasp.json.
+ * `clasp push` uploads the code only - still open the editor and Run "setupMicroTaskingSheet"
+ * once to (re)build the tabs. End users who copy the template still paste this file by hand.
  */
 
 // Origin version of this template. Keep in sync with buildVersionBase in app/build.gradle.kts.

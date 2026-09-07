@@ -1,0 +1,5 @@
+# clasp pushes everything in rootDir (./scripts) by default. Restrict it to just the
+# Apps Script project files so the Python build scripts here never get uploaded.
+**/**
+!appsscript.json
+!populate_google_sheet.js
