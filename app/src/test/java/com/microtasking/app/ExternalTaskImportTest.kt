@@ -174,4 +174,22 @@ class ExternalTaskImportTest {
         // category the sheet still has ("Cleaning") stays.
         assertEquals(listOf("external-Cleaning-A", "custom-2"), merged.map { it.id })
     }
+
+    @Test
+    fun mergeImportedManagedTasks_authoritativeCategoriesFromTabNamesNotTaskPresence() {
+        val existing = listOf(
+            ManagedTask("custom-keep", "In a live but empty tab", "Health", 5, false),
+            ManagedTask("custom-drop", "In a tab the sheet doesn't have", "Must Do", 5, false),
+            ManagedTask("seed-health-0", "Built-in health", "Health", 5, true)
+        )
+        // The sheet has a Cleaning tab (with a row) and a Health tab (currently empty).
+        val imported = listOf(ManagedTask("external-Cleaning-A", "A", "Cleaning", 5, false))
+        val tabNames = setOf("Cleaning", "Health")
+
+        val merged = mergeImportedManagedTasks(imported, existing, tabNames)
+
+        // custom-keep survives (Health is a real tab even with no rows); custom-drop and the
+        // built-in both go (no tab, or not custom).
+        assertEquals(listOf("external-Cleaning-A", "custom-keep"), merged.map { it.id })
+    }
 }

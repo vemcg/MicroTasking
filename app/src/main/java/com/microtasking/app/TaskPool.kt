@@ -129,13 +129,18 @@ fun writeManagedTasks(tasks: List<ManagedTask>): String = JSONArray().apply {
  * [ManagedTask.id]), the sheet is authoritative for [ManagedTask.enabled] - its column-A checkbox
  * is the source of truth - but the flags the user set in the app ([ManagedTask.neverSuggest],
  * [ManagedTask.temporarilyUnavailable]) are carried over so a re-sync doesn't silently undo them.
+ *
+ * [authoritativeCategories] is the sheet's tab list - the categories allowed to exist after this
+ * import. It defaults to the categories present in [imported], but the caller passes the actual
+ * tab names so a tab with zero task rows still counts as a live category, and a category with no
+ * tab is dropped even when the import brought no tasks.
  */
 fun mergeImportedManagedTasks(
     imported: List<ManagedTask>,
-    existing: List<ManagedTask>
+    existing: List<ManagedTask>,
+    authoritativeCategories: Set<String> = imported.map { it.category }.toSet()
 ): List<ManagedTask> {
     val priorById = existing.associateBy { it.id }
-    val importedCategories = imported.map { it.category }.toSet()
     val reconciled = imported.map { task ->
         val prior = priorById[task.id] ?: return@map task
         task.copy(
@@ -144,7 +149,7 @@ fun mergeImportedManagedTasks(
         )
     }
     return reconciled + existing.filter { task ->
-        task.id.startsWith("custom-") && task.category in importedCategories
+        task.id.startsWith("custom-") && task.category in authoritativeCategories
     }
 }
 

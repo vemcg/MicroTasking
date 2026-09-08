@@ -320,22 +320,35 @@ fun MicroTaskingApp(
             }
             isImportingSheet = false
             val importedTasks = result.tasks
-            if (importedTasks.isNotEmpty()) {
-                val importedCategories = importedTasks.map { it.category }.toSet()
-                savedManagedTasks = mergeImportedManagedTasks(importedTasks, savedManagedTasks)
+            // A sheet that still only has the Apps Script's default "Sheet1" hasn't been set up yet.
+            val blankDefaultSheet = importedTasks.isEmpty() &&
+                result.tabNames.size == 1 && result.tabNames.single().equals("Sheet1", ignoreCase = true)
+            // The sheet's tab names ARE the category list - authoritative even for a tab that
+            // currently has zero task rows. Fall back to task categories only when tab enumeration
+            // failed and we came in through the single-CSV path.
+            val authoritativeCategories = when {
+                result.tabNames.isNotEmpty() && !blankDefaultSheet -> result.tabNames.toSet()
+                else -> importedTasks.map { it.category }.toSet()
+            }
+
+            if (authoritativeCategories.isNotEmpty()) {
+                val before = savedManagedTasks.map { it.category }.toSet() + savedUserTasks.map { it.category }.toSet()
+                savedManagedTasks = mergeImportedManagedTasks(importedTasks, savedManagedTasks, authoritativeCategories)
                 onManagedTasksSaved(savedManagedTasks)
-                // The sheet's tabs are the category list now - drop legacy "My Tasks" entries
-                // whose category no longer has a tab.
-                val prunedUserTasks = savedUserTasks.filter { it.category in importedCategories }
+                val prunedUserTasks = savedUserTasks.filter { it.category in authoritativeCategories }
                 if (prunedUserTasks.size != savedUserTasks.size) {
                     savedUserTasks = prunedUserTasks
                     onUserTasksSaved(prunedUserTasks)
                 }
-                val categoryCount = importedTasks.map { it.category }.distinct().size
+                val removed = (before - authoritativeCategories).sorted()
                 val enabledCount = importedTasks.count { it.enabled }
-                sheetImportMessage =
-                    "Imported ${importedTasks.size} tasks across $categoryCount categories " +
-                    "($enabledCount checked and active)."
+                sheetImportMessage = buildString {
+                    append("Imported ${importedTasks.size} tasks across ${authoritativeCategories.size} categories ($enabledCount checked and active).")
+                    if (removed.isNotEmpty()) append(" Removed categories not in the sheet: ${removed.joinToString(", ")}.")
+                }
+            } else if (blankDefaultSheet) {
+                sheetImportMessage = "This Sheet only has an empty default \"Sheet1\" tab - run the MicroTasking " +
+                    "setup script on it first (Extensions → Apps Script → setupMicroTaskingSheet), then Update Tasks again."
             } else if (result.tabNames.isNotEmpty()) {
                 sheetImportMessage = "Found tabs (${result.tabNames.joinToString(", ")}) but no task rows in them. " +
                     "Check that row 1 of each tab has a \"description\" column header."
@@ -824,8 +837,8 @@ fun SettingsScreen(
             item {
                 OutlinedCard(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        sectionHeader("Active Categories")
-                        if (openSection == "Active Categories") {
+                        sectionHeader("Task Categories")
+                        if (openSection == "Task Categories") {
                             Text(
                                 "Choose which task categories are eligible for daily task prompts.",
                                 style = MaterialTheme.typography.bodySmall,
