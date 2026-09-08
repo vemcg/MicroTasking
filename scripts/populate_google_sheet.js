@@ -347,14 +347,22 @@ function ensureTriggers_() {
  *   - Column B is the description: typing a description into a row with no checkbox adds one
  *     (checked); clearing a row's description (trimmed empty) deletes the whole row - checkbox,
  *     description, and link together - so the table stays gap-free.
- * Script-driven cell writes don't re-fire onEdit, so the A1 fan-out below can't loop. Adding a
- * whole new tab is handled separately by onGridChange_ (an installable onChange trigger).
+ * Script-driven cell writes don't re-fire onEdit, so the A1 fan-out below can't loop.
+ *
+ * Adding a whole new tab is handled by onGridChange_ (an installable onChange trigger), but that
+ * only exists once setupMicroTaskingSheet has installed it. As a fallback that needs no install,
+ * if someone starts typing into a data row of a tab that never got a header, add the header now.
  */
 function onEdit(e) {
   if (!e || !e.range) return;
   var range = e.range;
   var sheet = range.getSheet();
   if (!sheet || sheet.getName() === "README") return;
+
+  // Lazy header for a tab that was added with "+" before the onChange trigger was installed.
+  if (range.getRow() >= 2 && String(sheet.getRange("B1").getValue()).trim() !== "Description") {
+    applyCategoryTabHeader_(sheet);
+  }
 
   // Master toggle in A1.
   if (range.getColumn() === 1 && range.getRow() === 1) {
