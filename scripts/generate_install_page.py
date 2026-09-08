@@ -305,6 +305,12 @@ def main() -> None:
     color: var(--accent);
     margin-bottom: 0.4rem;
   }}
+  .qr-meta {{
+    margin-top: 0.5rem;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    word-break: break-all;
+  }}
   .input-group {{
     margin: 1rem 0;
   }}
@@ -404,8 +410,8 @@ def main() -> None:
       <p>Instead of typing a long URL on your phone keyboard, generate a QR code right here:</p>
       <ol>
         <li>In your copied Google Sheet, make sure sharing is set to <strong>"Anyone with the link can view"</strong> (tap <strong>Share &rarr; Anyone with the link</strong>).</li>
-        <li>Copy your Google Sheet URL from your browser bar.</li>
-        <li>Paste your URL into the box below:</li>
+        <li>Copy your Google Sheet URL from your browser bar &mdash; paste the whole thing, <code>#gid=</code> and <code>?usp=</code> junk and all.</li>
+        <li>Paste your URL into the box below. It's trimmed down to just the sheet ID before the QR code is made.</li>
       </ol>
       <div class="input-group">
         <input type="url" id="sheetUrl" placeholder="https://docs.google.com/spreadsheets/d/your-sheet-id/edit..." oninput="generateSheetQr()" onfocus="this.select()">
@@ -413,6 +419,7 @@ def main() -> None:
       <div class="qr-container" id="sheetQrContainer" style="display:none;">
         <p style="margin-bottom: 0.5rem; font-weight: 600; color: var(--accent);">Your Sheet QR Code:</p>
         <div id="sheetQr"></div>
+        <div class="qr-meta" id="sheetQrMeta"></div>
       </div>
     </section>
 
@@ -435,26 +442,40 @@ def main() -> None:
   <script>
     const SHEET_URL_STORAGE_KEY = 'microtaskingSheetUrl';
 
+    // Reduce whatever the user pasted to the canonical shortest form the app needs:
+    // https://docs.google.com/spreadsheets/d/<id>  - no /edit, no #gid=, no ?usp= query.
+    function normalizeSheetUrl(raw) {{
+      const str = String(raw || '').trim();
+      const inUrl = str.match(/\\/spreadsheets\\/d\\/([a-zA-Z0-9_-]+)/);
+      if (inUrl) return 'https://docs.google.com/spreadsheets/d/' + inUrl[1];
+      const bareId = str.match(/^([a-zA-Z0-9_-]{{20,}})$/);
+      if (bareId) return 'https://docs.google.com/spreadsheets/d/' + bareId[1];
+      return null;
+    }}
+
     function generateSheetQr() {{
-      const input = document.getElementById('sheetUrl').value.trim();
       const container = document.getElementById('sheetQrContainer');
       const qrDiv = document.getElementById('sheetQr');
+      const meta = document.getElementById('sheetQrMeta');
+      const url = normalizeSheetUrl(document.getElementById('sheetUrl').value);
 
       qrDiv.innerHTML = '';
-      if (input.length > 10) {{
-        localStorage.setItem(SHEET_URL_STORAGE_KEY, input);
+      if (url) {{
+        localStorage.setItem(SHEET_URL_STORAGE_KEY, url);
         container.style.display = 'block';
         new QRCode(qrDiv, {{
-          text: input,
+          text: url,
           width: 200,
           height: 200,
           colorDark : "#000000",
           colorLight : "#ffffff",
           correctLevel : QRCode.CorrectLevel.M
         }});
+        meta.textContent = url + '  (generated ' + new Date().toLocaleString() + ')';
       }} else {{
         localStorage.removeItem(SHEET_URL_STORAGE_KEY);
         container.style.display = 'none';
+        meta.textContent = '';
       }}
     }}
 

@@ -122,10 +122,12 @@ fun writeManagedTasks(tasks: List<ManagedTask>): String = JSONArray().apply {
 
 /**
  * Folds a fresh sheet import into the existing pool. Every category present in [imported] is
- * replaced wholesale by what the sheet now says; categories the import doesn't mention are left
- * untouched. For a task that still exists after the import (same [ManagedTask.id]), the sheet is
- * authoritative for [ManagedTask.enabled] - its column-A checkbox is the source of truth - but the
- * flags the user set in the app's Task Pool screen ([ManagedTask.neverSuggest],
+ * replaced wholesale by what the sheet now says. A previously-imported task (`external-` id) whose
+ * category is no longer in the sheet - its tab was deleted or emptied - is dropped. Tasks the
+ * import doesn't own (built-in, `custom-` tasks the user added in-app) are always kept, whatever
+ * their category. For a task that still exists after the import (same [ManagedTask.id]), the sheet
+ * is authoritative for [ManagedTask.enabled] - its column-A checkbox is the source of truth - but
+ * the flags the user set in the app's Task Pool screen ([ManagedTask.neverSuggest],
  * [ManagedTask.temporarilyUnavailable]) are carried over so a re-sync doesn't silently undo them.
  */
 fun mergeImportedManagedTasks(
@@ -141,7 +143,9 @@ fun mergeImportedManagedTasks(
             temporarilyUnavailable = prior.temporarilyUnavailable
         )
     }
-    return reconciled + existing.filter { it.category !in importedCategories }
+    return reconciled + existing.filter { task ->
+        task.category !in importedCategories && !task.id.startsWith("external-")
+    }
 }
 
 private fun JSONObject.optNullableLong(key: String): Long? =

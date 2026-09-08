@@ -156,4 +156,22 @@ class ExternalTaskImportTest {
 
         assertEquals(listOf("external-Cleaning-A"), merged.map { it.id })
     }
+
+    @Test
+    fun mergeImportedManagedTasks_removedTabDropsItsExternalTasksButKeepsCustomAndBuiltIn() {
+        val existing = listOf(
+            ManagedTask("external-Errands-Old", "Old errand", "Errands", 5, false),
+            ManagedTask("custom-1", "My own task", "Errands", 10, false),
+            ManagedTask("builtin-focus-1", "Built-in focus task", "Focus", 5, true)
+        )
+        // Re-sync of a sheet that no longer has an "Errands" tab at all.
+        val imported = listOf(ManagedTask("external-Cleaning-A", "A", "Cleaning", 5, false))
+
+        val merged = mergeImportedManagedTasks(imported, existing)
+
+        assertEquals(
+            listOf("external-Cleaning-A", "custom-1", "builtin-focus-1"),
+            merged.map { it.id }
+        )
+    }
 }
