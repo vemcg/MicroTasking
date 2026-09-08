@@ -121,14 +121,15 @@ fun writeManagedTasks(tasks: List<ManagedTask>): String = JSONArray().apply {
 }.toString()
 
 /**
- * Folds a fresh sheet import into the existing pool. Every category present in [imported] is
- * replaced wholesale by what the sheet now says. A previously-imported task (`external-` id) whose
- * category is no longer in the sheet - its tab was deleted or emptied - is dropped. Tasks the
- * import doesn't own (built-in, `custom-` tasks the user added in-app) are always kept, whatever
- * their category. For a task that still exists after the import (same [ManagedTask.id]), the sheet
- * is authoritative for [ManagedTask.enabled] - its column-A checkbox is the source of truth - but
- * the flags the user set in the app's Task Pool screen ([ManagedTask.neverSuggest],
- * [ManagedTask.temporarilyUnavailable]) are carried over so a re-sync doesn't silently undo them.
+ * Folds a fresh sheet import into the existing pool. Once you've imported a sheet, that sheet is
+ * your category list: every category present in [imported] is replaced wholesale by what the sheet
+ * now says, and any category the sheet no longer has a tab for is dropped - including the built-in
+ * seed tasks the app shipped with. The one thing kept regardless of the sheet is a `custom-` task
+ * the user added by hand in the app's own Task Pool screen. For a task that survives the import
+ * (same [ManagedTask.id]), the sheet is authoritative for [ManagedTask.enabled] - its column-A
+ * checkbox is the source of truth - but the flags the user set in the app
+ * ([ManagedTask.neverSuggest], [ManagedTask.temporarilyUnavailable]) are carried over so a re-sync
+ * doesn't silently undo them.
  */
 fun mergeImportedManagedTasks(
     imported: List<ManagedTask>,
@@ -144,7 +145,7 @@ fun mergeImportedManagedTasks(
         )
     }
     return reconciled + existing.filter { task ->
-        task.category !in importedCategories && !task.id.startsWith("external-")
+        task.category !in importedCategories && task.id.startsWith("custom-")
     }
 }
 
