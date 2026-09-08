@@ -14,13 +14,21 @@
  *    browser blocked the popup - allow popups for script.google.com and Run again.
  * 6. It finishes in a few seconds and shows a toast in the Sheet. No add-ons or libraries are
  *    needed, it works on a blank spreadsheet, and the Sheet needs no particular name.
+ * 7. Reload the Sheet. From then on there's a "MicroTasking" menu:
+ *      - "Repair headers & triggers": non-destructive - headers any tab that lacks one and
+ *        (re)installs the edit triggers. Run this once in every copy, and after adding tabs.
+ *      - "Rebuild everything from template": the full setupMicroTaskingSheet (wipes the built-in
+ *        category tabs back to the canonical task list).
  *
- * Running setupMicroTaskingSheet also installs an onChange trigger (so new tabs get their header
- * row automatically) - the authorization prompt will mention managing triggers because of it.
+ * The live behavior (auto-header a new tab, checkbox-on-type, master A1 toggle) runs on TWO
+ * *installable* triggers (onGridChange_, onSheetEdit_) that setupMicroTaskingSheet / repairSheet_
+ * install. Installable (not simple `onEdit`) because a simple trigger fires unreliably in a copy
+ * of the template - which is why every copy must run one of the menu items once. The auth prompt
+ * mentions managing triggers for this reason.
  *
  * If "Running..." never ends: open Executions (clock icon, left sidebar) to see whether the run
- * actually finished or errored. onEdit / onGridChange_ / addRowCheckbox_ below are triggers -
- * don't run them by hand.
+ * actually finished or errored. onOpen / onSheetEdit_ / onGridChange_ / addRowCheckbox_ /
+ * repairSheet_ are triggers or menu handlers - don't run them by hand.
  *
  * MAINTAINER NOTE: this file is the source of truth and is pushed to the bound Apps Script
  * project of the shared template Sheet with `npm run push:sheet` (clasp). See .clasp.json.
@@ -293,13 +301,16 @@ function setupMicroTaskingSheet() {
     applyCategoryTabHeader_(sheet);
   });
 
-  // onEdit can't see a tab being added, so an installable onChange trigger headers new tabs.
+  // Install the installable onChange + onEdit triggers that drive the live behavior.
   ensureTriggers_();
 
   // toast(), not getUi().alert(): a toast is non-blocking and needs no UI context. alert() blocks
   // waiting for a click in the *spreadsheet* tab, which looks exactly like the script "hanging"
   // if you're still looking at the Apps Script editor.
-  ss.toast("README and all " + categories.length + " category tabs are ready.", "MicroTasking setup complete", 5);
+  ss.toast(
+    "README + " + categories.length + " category tabs ready, triggers installed. Reload for the MicroTasking menu.",
+    "MicroTasking setup complete", 6
+  );
 }
 
 /**
@@ -319,9 +330,41 @@ function applyCategoryTabHeader_(sheet) {
 }
 
 /**
- * Installable onChange handler (installed by setupMicroTaskingSheet via ensureTriggers_). onEdit
- * never fires for a sheet being inserted, so this fills in the header row + column widths on any
- * freshly added tab. Runs on every structural change; cheap and idempotent, so it just re-headers
+ * Adds the "MicroTasking" menu. onOpen is a simple trigger, so this alone needs no authorization -
+ * the menu items it points at do, the first time they run. This is the reliable entry point in a
+ * *copy* of the template (installable triggers and prior authorization never survive File → Make
+ * a copy, so a fresh copy has no working automation until one of these is run once).
+ */
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu("MicroTasking")
+    .addItem("Repair headers & triggers", "repairSheet_")
+    .addItem("Rebuild everything from template", "setupMicroTaskingSheet")
+    .addToUi();
+}
+
+/**
+ * Non-destructive fix-up: header any tab that's missing one, and (re)install the edit triggers.
+ * Safe to run any time - it never clears existing task rows. This is what a copy's owner runs
+ * once after File → Make a copy, or after adding tabs on mobile where the triggers don't fire.
+ */
+function repairSheet_() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  ss.getSheets().forEach(function (sheet) {
+    if (sheet.getName() === "README") return;
+    if (String(sheet.getRange("B1").getValue()).trim() === "Description") return;
+    applyCategoryTabHeader_(sheet);
+  });
+  var installed = ensureTriggers_();
+  ss.toast(
+    installed ? "Headers checked; edit triggers installed." : "Headers checked; edit triggers already set.",
+    "MicroTasking", 5
+  );
+}
+
+/**
+ * Installable onChange handler. A tab being inserted doesn't fire an edit event, so this fills in
+ * the header row + column widths on any freshly added tab. Idempotent - it just re-headers
  * whichever non-README tab is still missing its "Description" header.
  */
 function onGridChange_(e) {
@@ -334,34 +377,38 @@ function onGridChange_(e) {
   });
 }
 
-/** Idempotently installs the spreadsheet onChange trigger that onGridChange_ needs. */
+/**
+ * Idempotently installs the two spreadsheet triggers the live behavior needs, both *installable*
+ * (not simple onEdit): an installable trigger runs with the installer's full authorization, which
+ * is what makes it work reliably in a copy of the template - a plain `function onEdit` often
+ * doesn't fire there. Returns true if it created anything.
+ */
 function ensureTriggers_() {
-  var installed = ScriptApp.getProjectTriggers().some(function (t) {
-    return t.getHandlerFunction() === "onGridChange_";
-  });
-  if (!installed) {
-    ScriptApp.newTrigger("onGridChange_")
-      .forSpreadsheet(SpreadsheetApp.getActiveSpreadsheet())
-      .onChange()
-      .create();
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var handlers = ScriptApp.getProjectTriggers().map(function (t) { return t.getHandlerFunction(); });
+  var created = false;
+  if (handlers.indexOf("onGridChange_") === -1) {
+    ScriptApp.newTrigger("onGridChange_").forSpreadsheet(ss).onChange().create();
+    created = true;
   }
+  if (handlers.indexOf("onSheetEdit_") === -1) {
+    ScriptApp.newTrigger("onSheetEdit_").forSpreadsheet(ss).onEdit().create();
+    created = true;
+  }
+  return created;
 }
 
 /**
- * Live sheet behavior. This is a simple onEdit trigger: it runs only while the sheet is open in
- * a browser and edited by someone with edit access - never for the app's CSV read, and not
- * reliably on mobile. Two things:
+ * Installable onEdit handler (installed by ensureTriggers_ - there is deliberately no simple
+ * `onEdit`, which fires unreliably in template copies and would double-run alongside this one).
  *   - A1 is the tab's master toggle: flipping it sets every row checkbox below to match.
  *   - Column B is the description: typing a description into a row with no checkbox adds one
  *     (checked); clearing a row's description (trimmed empty) deletes the whole row - checkbox,
  *     description, and link together - so the table stays gap-free.
+ *   - Typing into a data row of a tab that has no header yet adds the header first.
  * Script-driven cell writes don't re-fire onEdit, so the A1 fan-out below can't loop.
- *
- * Adding a whole new tab is handled by onGridChange_ (an installable onChange trigger), but that
- * only exists once setupMicroTaskingSheet has installed it. As a fallback that needs no install,
- * if someone starts typing into a data row of a tab that never got a header, add the header now.
  */
-function onEdit(e) {
+function onSheetEdit_(e) {
   if (!e || !e.range) return;
   var range = e.range;
   var sheet = range.getSheet();
