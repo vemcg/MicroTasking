@@ -290,6 +290,14 @@ def main() -> None:
     max-width: 220px;
     height: auto;
   }}
+  /* qrcodejs drops a <canvas> (or a <table> fallback) straight into #sheetQr; center whichever. */
+  #sheetQr {{
+    display: flex;
+    justify-content: center;
+  }}
+  #sheetQr table {{
+    margin: 0 auto;
+  }}
   .qr-row {{
     display: flex;
     flex-wrap: wrap;
