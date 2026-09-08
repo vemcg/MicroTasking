@@ -285,6 +285,14 @@ function setupMicroTaskingSheet() {
     ss.deleteSheet(sheet1);
   }
 
+  // Header any extra tabs the user added by hand (e.g. on mobile, where the edit triggers never
+  // run) that don't have a header yet. Re-running setup is the reliable way to fix those up.
+  ss.getSheets().forEach(function (sheet) {
+    if (sheet.getName() === "README") return;
+    if (String(sheet.getRange("B1").getValue()).trim() === "Description") return;
+    applyCategoryTabHeader_(sheet);
+  });
+
   // onEdit can't see a tab being added, so an installable onChange trigger headers new tabs.
   ensureTriggers_();
 
