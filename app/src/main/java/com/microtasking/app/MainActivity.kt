@@ -14,6 +14,7 @@ import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -21,6 +22,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -319,8 +321,16 @@ fun MicroTaskingApp(
             isImportingSheet = false
             val importedTasks = result.tasks
             if (importedTasks.isNotEmpty()) {
+                val importedCategories = importedTasks.map { it.category }.toSet()
                 savedManagedTasks = mergeImportedManagedTasks(importedTasks, savedManagedTasks)
                 onManagedTasksSaved(savedManagedTasks)
+                // The sheet's tabs are the category list now - drop legacy "My Tasks" entries
+                // whose category no longer has a tab.
+                val prunedUserTasks = savedUserTasks.filter { it.category in importedCategories }
+                if (prunedUserTasks.size != savedUserTasks.size) {
+                    savedUserTasks = prunedUserTasks
+                    onUserTasksSaved(prunedUserTasks)
+                }
                 val categoryCount = importedTasks.map { it.category }.distinct().size
                 val enabledCount = importedTasks.count { it.enabled }
                 sheetImportMessage =
@@ -730,27 +740,25 @@ fun SettingsScreen(
     var promptsPerDay by remember { mutableStateOf(initialPromptsPerDay) }
     var maxQueueSize by remember { mutableStateOf(initialMaxQueueSize.toString()) }
     var sheetUrl by remember { mutableStateOf(initialSheetUrl) }
-    var categoriesExpanded by remember { mutableStateOf(true) }
-    var scheduleExpanded by remember { mutableStateOf(true) }
-    var externalPoolExpanded by remember { mutableStateOf(true) }
-    var localTasksExpanded by remember { mutableStateOf(true) }
-    var aboutExpanded by remember { mutableStateOf(false) }
+    // Accordion: at most one section open at a time. "" means all collapsed.
+    var openSection by remember { mutableStateOf("Import External Task Pool") }
     val focusManager = LocalFocusManager.current
 
     @Composable
-    fun sectionHeader(title: String, expanded: Boolean, onToggle: () -> Unit) {
+    fun sectionHeader(title: String) {
+        val expanded = openSection == title
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { openSection = if (expanded) "" else title },
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Text(title, style = MaterialTheme.typography.titleMedium)
-            IconButton(onClick = onToggle) {
-                Icon(
-                    if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
-                    contentDescription = if (expanded) "Collapse" else "Expand"
-                )
-            }
+            Icon(
+                if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                contentDescription = if (expanded) "Collapse" else "Expand"
+            )
         }
     }
 
@@ -773,10 +781,8 @@ fun SettingsScreen(
             item {
                 OutlinedCard(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        sectionHeader("Import External Task Pool", externalPoolExpanded) {
-                            externalPoolExpanded = !externalPoolExpanded
-                        }
-                        if (externalPoolExpanded) {
+                        sectionHeader("Import External Task Pool")
+                        if (openSection == "Import External Task Pool") {
                             Text(
                                 "Paste your Google Sheet URL into the onboarding page, then tap Scan QR Code below to register it here with your phone's camera. Each tab in the sheet (except a tab named \"README\") becomes a task category. Tasks import automatically right after a scan; use Update Tasks any time afterward to re-sync.",
                                 style = MaterialTheme.typography.bodySmall,
@@ -818,10 +824,8 @@ fun SettingsScreen(
             item {
                 OutlinedCard(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        sectionHeader("Active Categories", categoriesExpanded) {
-                            categoriesExpanded = !categoriesExpanded
-                        }
-                        if (categoriesExpanded) {
+                        sectionHeader("Active Categories")
+                        if (openSection == "Active Categories") {
                             Text(
                                 "Choose which task categories are eligible for daily task prompts.",
                                 style = MaterialTheme.typography.bodySmall,
@@ -834,18 +838,27 @@ fun SettingsScreen(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
-                            availableCategories.forEach { category ->
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Checkbox(
-                                        checked = category in selectedCategories,
-                                        onCheckedChange = { checked ->
-                                            selectedCategories = if (checked) selectedCategories + category else selectedCategories - category
-                                        }
-                                    )
-                                    Text(category)
+                            // Bounded + independently scrollable so a large category list never
+                            // pushes the rest of the section off-screen.
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(max = 320.dp)
+                                    .verticalScroll(rememberScrollState())
+                            ) {
+                                availableCategories.forEach { category ->
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Checkbox(
+                                            checked = category in selectedCategories,
+                                            onCheckedChange = { checked ->
+                                                selectedCategories = if (checked) selectedCategories + category else selectedCategories - category
+                                            }
+                                        )
+                                        Text(category)
+                                    }
                                 }
                             }
                         }
@@ -856,10 +869,8 @@ fun SettingsScreen(
             item {
                 OutlinedCard(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        sectionHeader("Prompting Schedule", scheduleExpanded) {
-                            scheduleExpanded = !scheduleExpanded
-                        }
-                        if (scheduleExpanded) {
+                        sectionHeader("Prompting Schedule")
+                        if (openSection == "Prompting Schedule") {
                             Button(
                                 modifier = Modifier.fillMaxWidth(),
                                 onClick = { onBackgroundPromptsChanged(!backgroundPromptsRunning) }
@@ -916,10 +927,8 @@ fun SettingsScreen(
             item {
                 OutlinedCard(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        sectionHeader("Local Task Management", localTasksExpanded) {
-                            localTasksExpanded = !localTasksExpanded
-                        }
-                        if (localTasksExpanded) {
+                        sectionHeader("Local Task Management")
+                        if (openSection == "Local Task Management") {
                             Text(
                                 "View, create, or edit your local custom tasks and task pool.",
                                 style = MaterialTheme.typography.bodySmall,
@@ -944,10 +953,8 @@ fun SettingsScreen(
             item {
                 OutlinedCard(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        sectionHeader("About", aboutExpanded) {
-                            aboutExpanded = !aboutExpanded
-                        }
-                        if (aboutExpanded) {
+                        sectionHeader("About")
+                        if (openSection == "About") {
                             Text(
                                 "v${BuildConfig.VERSION_BASE}-${BuildConfig.BUILD_NUMBER}",
                                 style = MaterialTheme.typography.bodyLarge

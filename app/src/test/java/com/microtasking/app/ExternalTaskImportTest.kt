@@ -118,7 +118,7 @@ class ExternalTaskImportTest {
                 neverSuggest = true
             ),
             ManagedTask(
-                id = "custom-1", description = "My own task", category = "Personal",
+                id = "custom-1", description = "My own cleaning task", category = "Cleaning",
                 durationMinutes = 10, builtIn = false
             )
         )
@@ -141,7 +141,7 @@ class ExternalTaskImportTest {
         assertFalse("sheet checkbox is authoritative for enabled", wipe.enabled)
         assertTrue("neverSuggest set in the app survives a re-sync", wipe.neverSuggest)
         assertTrue("temporarilyUnavailable set in the app survives a re-sync", wipe.temporarilyUnavailable)
-        assertTrue("a category the import didn't touch is left alone", merged.any { it.id == "custom-1" })
+        assertTrue("a custom task in a category the sheet still has is kept", merged.any { it.id == "custom-1" })
     }
 
     @Test
@@ -158,18 +158,20 @@ class ExternalTaskImportTest {
     }
 
     @Test
-    fun mergeImportedManagedTasks_removedTabDropsExternalAndBuiltInButKeepsCustom() {
+    fun mergeImportedManagedTasks_removedTabTakesItsWholeCategory() {
         val existing = listOf(
             ManagedTask("external-Errands-Old", "Old errand", "Errands", 5, false),
             ManagedTask("seed-errands-0", "Built-in errand", "Errands", 5, true),
-            ManagedTask("custom-1", "My own task", "Errands", 10, false)
+            ManagedTask("custom-1", "Hand-added errand", "Errands", 10, false),
+            ManagedTask("custom-2", "Hand-added cleaning task", "Cleaning", 10, false)
         )
         // Re-sync of a sheet that no longer has an "Errands" tab at all.
         val imported = listOf(ManagedTask("external-Cleaning-A", "A", "Cleaning", 5, false))
 
         val merged = mergeImportedManagedTasks(imported, existing)
 
-        // Only the hand-added custom task survives a category the sheet dropped.
-        assertEquals(listOf("external-Cleaning-A", "custom-1"), merged.map { it.id })
+        // "Errands" is gone entirely - external, built-in, and custom. A custom task in a
+        // category the sheet still has ("Cleaning") stays.
+        assertEquals(listOf("external-Cleaning-A", "custom-2"), merged.map { it.id })
     }
 }
