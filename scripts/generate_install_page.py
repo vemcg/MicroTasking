@@ -450,25 +450,22 @@ def main() -> None:
   <script>
     const SHEET_URL_STORAGE_KEY = 'microtaskingSheetUrl';
 
-    // Reduce whatever the user pasted to the canonical shortest form the app needs:
-    // https://docs.google.com/spreadsheets/d/<id>  - no /edit, no #gid=, no ?usp= query.
-    function normalizeSheetUrl(raw) {{
+    // The spreadsheet id out of whatever the user pasted (full URL, /edit#gid= link, or a bare id).
+    function sheetIdFrom(raw) {{
       const str = String(raw || '').trim();
-      const inUrl = str.match(/\\/spreadsheets\\/d\\/([a-zA-Z0-9_-]+)/);
-      if (inUrl) return 'https://docs.google.com/spreadsheets/d/' + inUrl[1];
-      const bareId = str.match(/^([a-zA-Z0-9_-]{{20,}})$/);
-      if (bareId) return 'https://docs.google.com/spreadsheets/d/' + bareId[1];
-      return null;
+      const m = str.match(/\\/spreadsheets\\/d\\/([a-zA-Z0-9_-]+)/) || str.match(/^([a-zA-Z0-9_-]{{20,}})$/);
+      return m ? m[1] : null;
     }}
 
     function generateSheetQr() {{
       const container = document.getElementById('sheetQrContainer');
       const qrDiv = document.getElementById('sheetQr');
       const meta = document.getElementById('sheetQrMeta');
-      const url = normalizeSheetUrl(document.getElementById('sheetUrl').value);
+      const id = sheetIdFrom(document.getElementById('sheetUrl').value);
 
       qrDiv.innerHTML = '';
-      if (url) {{
+      if (id) {{
+        const url = 'https://docs.google.com/spreadsheets/d/' + id;
         localStorage.setItem(SHEET_URL_STORAGE_KEY, url);
         container.style.display = 'block';
         new QRCode(qrDiv, {{
@@ -479,7 +476,7 @@ def main() -> None:
           colorLight : "#ffffff",
           correctLevel : QRCode.CorrectLevel.M
         }});
-        meta.textContent = url + '  (generated ' + new Date().toLocaleString() + ')';
+        meta.textContent = 'Generated from sheet ' + id + ' at ' + new Date().toLocaleString();
       }} else {{
         localStorage.removeItem(SHEET_URL_STORAGE_KEY);
         container.style.display = 'none';
