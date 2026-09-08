@@ -233,11 +233,11 @@
           </div>
             <div class="qr-container">
             <div class="qr-label">spreadsheet-improvements</div>
-            <img src="qr-0.1.7-59.png" alt="MicroTasking APK QR Code (v0.1.7-59)">
+            <img src="qr-0.1.7-60.png" alt="MicroTasking APK QR Code (v0.1.7-60)">
             <br>
-            <a href="https://github.com/vemcg/MicroTasking/releases/download/v0.1.7-59/MicroTasking-v0.1.7-59.apk" class="btn" target="_blank" rel="noopener">Download MicroTasking APK (v0.1.7-59)</a>
+            <a href="https://github.com/vemcg/MicroTasking/releases/download/v0.1.7-60/MicroTasking-v0.1.7-60.apk" class="btn" target="_blank" rel="noopener">Download MicroTasking APK (v0.1.7-60)</a>
             <br>
-            <a href="https://github.com/vemcg/MicroTasking/releases/download/v0.1.7-59/MicroTasking-v0.1.7-59.apk" target="_blank" rel="noopener">Open the download again</a>
+            <a href="https://github.com/vemcg/MicroTasking/releases/download/v0.1.7-60/MicroTasking-v0.1.7-60.apk" target="_blank" rel="noopener">Open the download again</a>
           </div>
           </div>
           <p class="qr-guidance"><strong>Which one to use:</strong> Install from the <strong>Stable Release</strong> on the left &mdash; that is the build you should download and run. The <strong>spreadsheet-improvements</strong> development build on the right is an in-progress branch, published for testing only. You are welcome to try it, but it may be unstable, may fail to install or launch, and carries no guarantee that it works at all.</p>
@@ -297,25 +297,22 @@
   <script>
     const SHEET_URL_STORAGE_KEY = 'microtaskingSheetUrl';
 
-    // Reduce whatever the user pasted to the canonical shortest form the app needs:
-    // https://docs.google.com/spreadsheets/d/<id>  - no /edit, no #gid=, no ?usp= query.
-    function normalizeSheetUrl(raw) {
+    // The spreadsheet id out of whatever the user pasted (full URL, /edit#gid= link, or a bare id).
+    function sheetIdFrom(raw) {
       const str = String(raw || '').trim();
-      const inUrl = str.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
-      if (inUrl) return 'https://docs.google.com/spreadsheets/d/' + inUrl[1];
-      const bareId = str.match(/^([a-zA-Z0-9_-]{20,})$/);
-      if (bareId) return 'https://docs.google.com/spreadsheets/d/' + bareId[1];
-      return null;
+      const m = str.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/) || str.match(/^([a-zA-Z0-9_-]{20,})$/);
+      return m ? m[1] : null;
     }
 
     function generateSheetQr() {
       const container = document.getElementById('sheetQrContainer');
       const qrDiv = document.getElementById('sheetQr');
       const meta = document.getElementById('sheetQrMeta');
-      const url = normalizeSheetUrl(document.getElementById('sheetUrl').value);
+      const id = sheetIdFrom(document.getElementById('sheetUrl').value);
 
       qrDiv.innerHTML = '';
-      if (url) {
+      if (id) {
+        const url = 'https://docs.google.com/spreadsheets/d/' + id;
         localStorage.setItem(SHEET_URL_STORAGE_KEY, url);
         container.style.display = 'block';
         new QRCode(qrDiv, {
@@ -326,7 +323,7 @@
           colorLight : "#ffffff",
           correctLevel : QRCode.CorrectLevel.M
         });
-        meta.textContent = url + '  (generated ' + new Date().toLocaleString() + ')';
+        meta.textContent = 'Generated from sheet ' + id + ' at ' + new Date().toLocaleString();
       } else {
         localStorage.removeItem(SHEET_URL_STORAGE_KEY);
         container.style.display = 'none';
