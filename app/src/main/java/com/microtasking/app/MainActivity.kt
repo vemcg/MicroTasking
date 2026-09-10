@@ -411,7 +411,7 @@ fun MicroTaskingApp(
             return@LaunchedEffect
         }
         // Tick once on entry so a window opening (or a settings change) dispatches immediately
-        // when the queue is under half full, rather than waiting out a whole interval first.
+        // rather than waiting out a whole interval first.
         withContext(Dispatchers.IO) { TaskDelivery.tick(context) }
         refreshFromPrefs()
         // 1s poll: cheap while foregrounded (screen is on), doubles as the countdown clock, and

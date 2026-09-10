@@ -219,13 +219,16 @@ object TaskDelivery {
      * Runs one pacing tick: reconciles state (see [reconcileState]), decides whether to add a task
      * to the queue, computes the fixed interval until the next tick, and persists everything
      * (including next_dispatch_epoch_ms, which drives the on-screen countdown and the background
-     * alarm). The dispatch decision is a plain queue-fill check:
-     *  - Below half full (or a forced tap) -> add a task now. Next interval spreads the remaining
-     *    N-1 dispatches across the whole window.
-     *  - Half or more full -> skip. Next interval is paced across the time left in the window.
-     * A task is only ever timed out by being pushed off the top - which now only happens on a
-     * forced dispatch while the queue is already at capacity, and only in rapid-testing mode
-     * (a normal-mode forced tap into a full queue is a no-op, flagged via [TickResult.queueFull]).
+     * alarm). Every tick that gets past the gates adds a task to the queue:
+     *  - Queue below capacity -> the new task just joins it.
+     *  - Queue already full -> the new arrival pushes the oldest actionable task(s) off the top,
+     *    and that eviction is a timeout. This is the only automatic failure path now that
+     *    window-close no longer abandons the queue - a stale task the user never acted on is
+     *    aged out by the regular cadence.
+     * The one exception is a manual "give me one now" tap into an already-full queue in normal
+     * mode: that's a no-op (flagged via [TickResult.queueFull]), because an impatient tap
+     * shouldn't cost you a task - only the automatic cadence times things out. In rapid-testing
+     * mode even the tap evicts, so a developer can burn through the queue quickly.
      * Delivery is gated on backgroundPromptsEnabled (kept in sync with the window by
      * reconcileState) unless [force] is set.
      */
@@ -260,7 +263,6 @@ object TaskDelivery {
 
         val actionable = state.queue.filter { it.isActionable() }
         val activeCount = actionable.size
-        val underHalf = activeCount * 2 < settings.maxQueueSize
         val atCapacity = activeCount >= settings.maxQueueSize
 
         var dispatched = false
@@ -269,12 +271,12 @@ object TaskDelivery {
         if (force && atCapacity && !isRapidTestingMode(settings.promptsPerDay)) {
             // Normal mode: a manual "give me one now" tap does nothing while the queue is full.
             queueFull = true
-        } else if (force || underHalf) {
+        } else {
             val keepCount = (settings.maxQueueSize - 1).coerceAtLeast(0)
             if (activeCount >= settings.maxQueueSize) {
-                // Only reachable via a forced dispatch in rapid-testing mode: the oldest actionable
-                // entries are about to be pushed off the top by the new arrival without the user
-                // ever having acted on them - that's a timeout.
+                // The queue is full and a new task is arriving anyway (automatic cadence, or a
+                // forced tap in rapid-testing mode): the oldest actionable entries get pushed off
+                // the top without the user ever having acted on them - that's a timeout.
                 val timedOutCount = activeCount - keepCount
                 state.streak = 0
                 state.timeoutStreak += timedOutCount

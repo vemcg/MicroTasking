@@ -100,13 +100,14 @@ deliberate — just do the task immediately.
 
 ## Prompt cadence
 - New prompts are dispatched on a **fixed interval**, recomputed on every scheduling tick
-  (window open, each background alarm, app reopen) from the queue's fill level:
-  - **Below half full** → dispatch one now; the next interval spreads the remaining
-    *prompts-per-day − 1* dispatches evenly across the whole active window.
-  - **Half or more full** → skip this dispatch; the next interval paces *prompts-per-day*
-    across the time left in the window.
+  (window open, each background alarm, app reopen). **Every automatic tick dispatches a task**:
+  - Queue **below capacity** → the new task just joins it. The next interval spreads the
+    remaining *prompts-per-day − 1* dispatches evenly across the whole active window.
+  - Queue **already full** → the new arrival pushes the **oldest** actionable task off the top
+    and that eviction is a **timeout** — the regular automatic failure path for a stale task
+    the user never acted on.
 - The active window closing **no longer clears the queue** — a carried-over task simply
-  waits until it's done or pushed off the top of a full queue.
+  waits until it's done or aged out by the cadence above.
 - The task screen shows a live **H:MM:SS countdown** to the next dispatch; tapping it forces
   a task immediately and re-paces (a no-op when the queue is already full, except in
   rapid-testing mode where it evicts the oldest).

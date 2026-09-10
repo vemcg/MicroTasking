@@ -49,7 +49,7 @@ fun millisUntilWindowCloses(now: LocalDateTime, startHour: Int, endHour: Int): L
  * seconds instead of 30, and the "this week"/"this month" score-screen windows drop to minutes
  * instead of days (see below), so a developer can actually sit and watch the pacing/bucketing.
  */
-private const val RAPID_TESTING_THRESHOLD = 1000
+private const val RAPID_TESTING_THRESHOLD = 500
 
 fun isRapidTestingMode(promptsPerDay: Int): Boolean = promptsPerDay >= RAPID_TESTING_THRESHOLD
 
@@ -80,10 +80,11 @@ fun activeWindowLengthMillis(startHour: Int, endHour: Int): Long {
  * "prompts per day" is 0 (nothing is ever dispatched). This is a plain fixed cadence, not a
  * window gate - the caller ([TaskDelivery.tick]) decides whether delivery should happen at all.
  *
- * When the previous tick actually dispatched a task, the remaining N-1 dispatches are spread
- * evenly across the *whole* window (windowLength / (N - 1)). When it skipped (queue was half or
- * more full), the next check is paced across the time *left* in the window (remainingWindow / N).
- * Either way the result is floored by [minDelayMillis] and capped at 24h.
+ * When the previous tick actually dispatched a task (the usual case - every automatic tick
+ * dispatches now), the remaining N-1 dispatches are spread evenly across the *whole* window
+ * (windowLength / (N - 1)). When it didn't dispatch (a manual tap into an already-full queue in
+ * normal mode - a no-op), the next check is paced across the time *left* in the window
+ * (remainingWindow / N). Either way the result is floored by [minDelayMillis] and capped at 24h.
  */
 fun fixedDispatchIntervalMillis(
     now: LocalDateTime,

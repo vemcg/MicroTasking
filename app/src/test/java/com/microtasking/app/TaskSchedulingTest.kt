@@ -10,9 +10,9 @@ import java.time.LocalDateTime
 class TaskSchedulingTest {
     @Test
     fun isRapidTestingMode_onlyAboveThreshold() {
-        assertTrue(isRapidTestingMode(1000))
+        assertTrue(isRapidTestingMode(500))
         assertTrue(isRapidTestingMode(5000))
-        assertTrue(!isRapidTestingMode(999))
+        assertTrue(!isRapidTestingMode(499))
         assertTrue(!isRapidTestingMode(0))
     }
 
@@ -34,8 +34,8 @@ class TaskSchedulingTest {
     }
 
     @Test
-    fun fixedDispatchIntervalMillis_skipCase_dividesRemainingWindowByN() {
-        // 10:00, window 9-21 -> 11h left, previous tick skipped, N = 11 -> 11h / 11 = 1h.
+    fun fixedDispatchIntervalMillis_noDispatchCase_dividesRemainingWindowByN() {
+        // 10:00, window 9-21 -> 11h left, previous tick didn't dispatch, N = 11 -> 11h / 11 = 1h.
         val now = LocalDateTime.of(2026, 1, 5, 10, 0)
         val interval = fixedDispatchIntervalMillis(now, startHour = 9, endHour = 21, promptsPerDay = 11, dispatched = false)
         assertEquals(60 * 60 * 1000L, interval)
@@ -76,9 +76,9 @@ class TaskSchedulingTest {
     @Test
     fun weekAndMonthScoreWindowMillis_switchOnPromptsPerDay() {
         val now = LocalDateTime.of(2026, 2, 10, 12, 0) // February - 28 days in 2026 (not a leap year)
-        assertEquals(7 * 24 * 60 * 60 * 1000L, weekScoreWindowMillis(promptsPerDay = 500))
-        assertEquals(7 * 60_000L, weekScoreWindowMillis(promptsPerDay = 1000))
-        assertEquals(28 * 24 * 60 * 60 * 1000L, monthScoreWindowMillis(now, promptsPerDay = 500))
-        assertEquals(28 * 60_000L, monthScoreWindowMillis(now, promptsPerDay = 1000))
+        assertEquals(7 * 24 * 60 * 60 * 1000L, weekScoreWindowMillis(promptsPerDay = 499))
+        assertEquals(7 * 60_000L, weekScoreWindowMillis(promptsPerDay = 500))
+        assertEquals(28 * 24 * 60 * 60 * 1000L, monthScoreWindowMillis(now, promptsPerDay = 499))
+        assertEquals(28 * 60_000L, monthScoreWindowMillis(now, promptsPerDay = 500))
     }
 }
