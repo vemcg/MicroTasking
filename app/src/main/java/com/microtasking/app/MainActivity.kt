@@ -62,6 +62,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
@@ -133,6 +134,8 @@ class MainActivity : ComponentActivity() {
                         initialStreak = preferences.getInt("streak", 0),
                         initialLongestStreak = preferences.getInt("longest_streak", 0),
                         initialTimeoutStreak = preferences.getInt("timeout_streak", 0),
+                        initialCleanDayStreak = preferences.getInt("clean_day_streak", 0),
+                        initialCleanDayStreakLongest = preferences.getInt("clean_day_streak_longest", 0),
                         initialLastOutcome = runCatching {
                             TaskLifecycleState.valueOf(preferences.getString("last_outcome", TaskLifecycleState.COMPLETED.name)!!)
                         }.getOrDefault(TaskLifecycleState.COMPLETED),
@@ -222,6 +225,8 @@ fun MicroTaskingApp(
     initialStreak: Int,
     initialLongestStreak: Int,
     initialTimeoutStreak: Int,
+    initialCleanDayStreak: Int,
+    initialCleanDayStreakLongest: Int,
     initialLastOutcome: TaskLifecycleState,
     initialCompletionLog: List<CompletionRecord>,
     onSettingsSaved: (Set<String>, String, String, String, Int, String) -> Unit,
@@ -250,10 +255,15 @@ fun MicroTaskingApp(
     var streak by remember { mutableIntStateOf(initialStreak) }
     var longestStreak by remember { mutableIntStateOf(initialLongestStreak) }
     var timeoutStreak by remember { mutableIntStateOf(initialTimeoutStreak) }
+    var cleanDayStreak by remember { mutableIntStateOf(initialCleanDayStreak) }
+    var cleanDayStreakLongest by remember { mutableIntStateOf(initialCleanDayStreakLongest) }
     var lastOutcome by remember { mutableStateOf(initialLastOutcome) }
     var completionLog by remember { mutableStateOf(initialCompletionLog) }
     var scoreEntryToken by remember { mutableIntStateOf(0) }
     var backgroundPromptsRunning by remember { mutableStateOf(true) }
+    var nextDispatchEpoch by remember { mutableStateOf<Long?>(null) }
+    var clockMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    var queueFullFlashUntil by remember { mutableLongStateOf(0L) }
     var isImportingSheet by remember { mutableStateOf(false) }
     var sheetImportMessage by remember { mutableStateOf<String?>(null) }
     val coroutineScope = rememberCoroutineScope()
@@ -311,6 +321,37 @@ fun MicroTaskingApp(
         TaskDelivery.prefs(context).edit().putString("completion_log", writeCompletionLog(trimmed)).apply()
     }
 
+    // The clean-day streak (Score screen) counts days with at least one completion and no
+    // abandon/timeout. These per-day flags are read back and folded into the streak by
+    // TaskDelivery.reconcileState when the calendar day rolls over.
+    fun markDayHadCompletion() {
+        TaskDelivery.prefs(context).edit().putBoolean("day_had_completion", true).apply()
+    }
+
+    fun markDayHadFailure() {
+        cleanDayStreak = 0
+        TaskDelivery.prefs(context).edit()
+            .putBoolean("day_had_failure", true)
+            .putInt("clean_day_streak", 0)
+            .apply()
+    }
+
+    // Pulls the queue/streak/window state TaskDelivery just persisted back into UI state.
+    fun refreshFromPrefs() {
+        val prefs = TaskDelivery.prefs(context)
+        taskQueue = readTaskQueue(prefs.getString("task_queue", "[]") ?: "[]")
+        streak = prefs.getInt("streak", 0)
+        longestStreak = prefs.getInt("longest_streak", 0)
+        timeoutStreak = prefs.getInt("timeout_streak", 0)
+        cleanDayStreak = prefs.getInt("clean_day_streak", 0)
+        cleanDayStreakLongest = prefs.getInt("clean_day_streak_longest", 0)
+        lastOutcome = runCatching {
+            TaskLifecycleState.valueOf(prefs.getString("last_outcome", TaskLifecycleState.COMPLETED.name)!!)
+        }.getOrDefault(TaskLifecycleState.COMPLETED)
+        backgroundPromptsRunning = prefs.getBoolean("background_prompts_enabled", true)
+        nextDispatchEpoch = prefs.getLong("next_dispatch_epoch_ms", 0L).takeIf { it > 0L }
+    }
+
     fun runSheetImport(url: String) {
         isImportingSheet = true
         sheetImportMessage = null
@@ -363,36 +404,56 @@ fun MicroTaskingApp(
         promptTasks,
         savedStartHour,
         savedEndHour,
-        savedPromptsPerDay
+        savedPromptsPerDay,
+        savedMaxQueueSize
     ) {
         if (promptTasks.isEmpty()) {
             return@LaunchedEffect
         }
+        // Tick once on entry so a window opening (or a settings change) dispatches immediately
+        // when the queue is under half full, rather than waiting out a whole interval first.
+        withContext(Dispatchers.IO) { TaskDelivery.tick(context) }
+        refreshFromPrefs()
+        // 1s poll: cheap while foregrounded (screen is on), doubles as the countdown clock, and
+        // lets a force-dispatch tap take effect within a second by just rewriting the epoch.
         while (true) {
-            val delayMs = TaskDelivery.computeNextDelayMillis(context)
-            if (delayMs == null) {
-                delay(5 * 60_000L)
-                continue
+            delay(1_000L)
+            clockMillis = System.currentTimeMillis()
+            val epoch = TaskDelivery.prefs(context).getLong("next_dispatch_epoch_ms", 0L)
+            if (epoch in 1..clockMillis) {
+                // Same shared function the background alarm uses, so foreground and background
+                // read and write the exact same persisted queue/streak/window state.
+                val result = withContext(Dispatchers.IO) { TaskDelivery.tick(context) }
+                refreshFromPrefs()
+                if (result.dispatched) {
+                    showingScore = false
+                }
             }
-            delay(delayMs)
-            // Goes through the same shared function the background alarm receiver uses, so
-            // whichever one is active (this loop while open, the alarm chain while closed) reads
-            // and writes the exact same persisted queue/streak/window state.
-            val added = TaskDelivery.deliverOrConsumeSlot(context)
-            val prefs = TaskDelivery.prefs(context)
-            taskQueue = readTaskQueue(prefs.getString("task_queue", "[]") ?: "[]")
-            streak = prefs.getInt("streak", 0)
-            longestStreak = prefs.getInt("longest_streak", 0)
-            timeoutStreak = prefs.getInt("timeout_streak", 0)
-            lastOutcome = runCatching {
-                TaskLifecycleState.valueOf(prefs.getString("last_outcome", TaskLifecycleState.COMPLETED.name)!!)
-            }.getOrDefault(TaskLifecycleState.COMPLETED)
-            // A new window starting auto-clears a pause, which happens inside deliverOrConsumeSlot -
-            // pick that up here so the Pause/Resume button doesn't show stale state.
-            backgroundPromptsRunning = prefs.getBoolean("background_prompts_enabled", true)
-            if (added) {
-                showingScore = false
+        }
+    }
+
+    fun forceDispatchNow() {
+        coroutineScope.launch {
+            val result = withContext(Dispatchers.IO) { TaskDelivery.tick(context, force = true) }
+            refreshFromPrefs()
+            clockMillis = System.currentTimeMillis()
+            when {
+                result.queueFull -> queueFullFlashUntil = System.currentTimeMillis() + 2_000L
+                result.dispatched -> showingScore = false
             }
+        }
+    }
+
+    // Pause/Resume from any screen. Resuming immediately re-ticks so a task is (re-)paced right
+    // away instead of waiting out whatever interval was already committed - this is also the fix
+    // for the "manual Resume doesn't deliver promptly" defect.
+    fun setBackgroundPrompts(enabled: Boolean) {
+        backgroundPromptsRunning = enabled
+        onBackgroundPromptsChanged(enabled)
+        coroutineScope.launch {
+            withContext(Dispatchers.IO) { TaskDelivery.tick(context) }
+            refreshFromPrefs()
+            clockMillis = System.currentTimeMillis()
         }
     }
 
@@ -442,10 +503,7 @@ fun MicroTaskingApp(
             onOpenQrScanner = { showingQrScanner = true },
             onSyncSheet = { url -> runSheetImport(url) },
             onCancel = { if (setupComplete) showingSettings = false },
-            onBackgroundPromptsChanged = { enabled ->
-                backgroundPromptsRunning = enabled
-                onBackgroundPromptsChanged(enabled)
-            },
+            onBackgroundPromptsChanged = { setBackgroundPrompts(it) },
             onSave = { categories, start, end, prompts, queueSize, sheetUrl ->
                 savedCategories = categories
                 savedStartHour = start
@@ -461,6 +519,8 @@ fun MicroTaskingApp(
         ScoreScreen(
             streak = streak,
             longestStreak = longestStreak,
+            cleanDayStreak = cleanDayStreak,
+            cleanDayStreakLongest = cleanDayStreakLongest,
             completionLog = completionLog,
             promptsPerDay = savedPromptsPerDay.toIntOrNull() ?: 0,
             outcome = lastOutcome,
@@ -468,10 +528,7 @@ fun MicroTaskingApp(
             entryToken = scoreEntryToken,
             backgroundPromptsRunning = backgroundPromptsRunning,
             onOpenSettings = { showingSettings = true },
-            onBackgroundPromptsChanged = { enabled ->
-                backgroundPromptsRunning = enabled
-                onBackgroundPromptsChanged(enabled)
-            },
+            onBackgroundPromptsChanged = { setBackgroundPrompts(it) },
             onReturnToTaskList = {
                 showingScore = false
             }
@@ -481,6 +538,12 @@ fun MicroTaskingApp(
             taskEntries = visibleTaskEntries,
             streak = streak,
             maxQueueSize = savedMaxQueueSize,
+            promptsPerDay = savedPromptsPerDay.toIntOrNull() ?: 0,
+            nextDispatchEpoch = nextDispatchEpoch,
+            clockMillis = clockMillis,
+            queueFullFlash = clockMillis < queueFullFlashUntil,
+            withinWindow = isWithinActiveWindow(LocalDateTime.now(), savedStartHour.toIntOrNull() ?: 0, savedEndHour.toIntOrNull() ?: 24),
+            onForceDispatch = { forceDispatchNow() },
             onOpenSettings = { showingSettings = true },
             onOpenScore = {
                 scoreEntryToken++
@@ -493,6 +556,7 @@ fun MicroTaskingApp(
                 val newStreak = streak + 1
                 persistLastOutcome(TaskLifecycleState.COMPLETED)
                 persistStreak(newStreak)
+                markDayHadCompletion()
                 persistCompletionLog(completionLog + CompletionRecord(System.currentTimeMillis(), newStreak))
                 persistTaskQueue(taskQueue.map { if (it.task.id == taskId) it.complete() else it })
                 scoreEntryToken++
@@ -501,6 +565,7 @@ fun MicroTaskingApp(
             onAbandon = { taskId ->
                 persistLastOutcome(TaskLifecycleState.ABANDONED)
                 persistStreak(0)
+                markDayHadFailure()
                 persistTaskQueue(taskQueue.map { if (it.task.id == taskId) it.abandon() else it })
                 scoreEntryToken++
                 showingScore = true
@@ -523,12 +588,15 @@ fun MicroTaskingApp(
                 showingScore = false
             },
             backgroundPromptsRunning = backgroundPromptsRunning,
-            onBackgroundPromptsChanged = { enabled ->
-                backgroundPromptsRunning = enabled
-                onBackgroundPromptsChanged(enabled)
-            }
+            onBackgroundPromptsChanged = { setBackgroundPrompts(it) }
         )
     }
+}
+
+/** A rough H:MM:SS for a non-negative countdown; clamps negatives to 0:00:00. */
+fun formatCountdown(millis: Long): String {
+    val total = (millis / 1000L).coerceAtLeast(0L)
+    return "%d:%02d:%02d".format(total / 3600L, (total % 3600L) / 60L, total % 60L)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -537,7 +605,13 @@ fun TaskPromptScreen(
     taskEntries: List<TaskStackEntry>,
     streak: Int,
     maxQueueSize: Int,
+    promptsPerDay: Int,
+    nextDispatchEpoch: Long?,
+    clockMillis: Long,
+    queueFullFlash: Boolean,
+    withinWindow: Boolean,
     backgroundPromptsRunning: Boolean,
+    onForceDispatch: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenScore: () -> Unit,
     onBackgroundPromptsChanged: (Boolean) -> Unit,
@@ -569,7 +643,8 @@ fun TaskPromptScreen(
 
         LazyColumn(
             modifier = Modifier
-                .fillMaxSize()
+                .weight(1f)
+                .fillMaxWidth()
                 .padding(horizontal = 18.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
@@ -627,6 +702,29 @@ fun TaskPromptScreen(
                 }
             }
         }
+
+        val countdownText = when {
+            queueFullFlash -> "Queue full — finish one first"
+            promptsPerDay <= 0 -> "Automatic prompts off — set \"prompts per day\""
+            !backgroundPromptsRunning && withinWindow -> "Paused — tap for a task now"
+            !withinWindow && nextDispatchEpoch != null ->
+                "Window opens in ${formatCountdown(nextDispatchEpoch - clockMillis)} — tap for one now"
+            nextDispatchEpoch != null ->
+                "Next task in ${formatCountdown(nextDispatchEpoch - clockMillis)} — tap for it now"
+            else -> "Tap for a task now"
+        }
+        Surface(shadowElevation = 4.dp) {
+            Text(
+                text = countdownText,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onForceDispatch() }
+                    .navigationBarsPadding()
+                    .padding(horizontal = 24.dp, vertical = 16.dp),
+                style = MaterialTheme.typography.titleMedium,
+                color = if (queueFullFlash) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+            )
+        }
     }
 }
 
@@ -635,6 +733,8 @@ fun TaskPromptScreen(
 fun ScoreScreen(
     streak: Int,
     longestStreak: Int,
+    cleanDayStreak: Int,
+    cleanDayStreakLongest: Int,
     completionLog: List<CompletionRecord>,
     promptsPerDay: Int,
     outcome: TaskLifecycleState,
@@ -716,6 +816,11 @@ fun ScoreScreen(
             Text("This week: $weekLongest")
             Text("This month: $monthLongest")
             Text("All time: $longestStreak")
+            Text(
+                text = "Clean days: $cleanDayStreak (best $cleanDayStreakLongest)",
+                modifier = Modifier.padding(top = 16.dp),
+                style = MaterialTheme.typography.bodyLarge
+            )
             if (!backgroundPromptsRunning) {
                 Text(
                     text = "Background prompts are stopped.",
@@ -912,7 +1017,9 @@ fun SettingsScreen(
                                 keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Down) })
                             )
                             Text(
-                                "Start 0 and end 24 means the active window never ends, so tasks are never timed out.",
+                                "Start 0 and end 24 means the active window never ends. A task is only ever lost by " +
+                                    "being pushed off the top of a full queue before you get to it - the window closing " +
+                                    "no longer clears the queue.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

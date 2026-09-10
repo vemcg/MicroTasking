@@ -16,4 +16,4 @@ Field-testing defects found in shipped/branch builds. Feature-scope work lives i
 
 **Possible fix (per Vern):** On Resume, run one delivery slot immediately (`TaskDelivery.deliverOrConsumeSlot`) and then recompute pacing — e.g. make `backgroundPromptsRunning` a `LaunchedEffect` key (or cancel/restart the loop), and re-arm the background alarm with a near-zero delay. Respect `maxQueueSize` and the active-window gating so Resume can't overfill the queue or force delivery where it shouldn't.
 
-**Status:** Recorded, not yet fixed.
+**Status:** Fixed on `tasking-revisited` (2026-09-10) as part of the dispatch-model rework. Pause/Resume now goes through `MainActivity.setBackgroundPrompts`, which persists the flag and then immediately runs `TaskDelivery.tick` — that re-paces and, when the queue is below half full, dispatches a task right away. The foreground loop also polls every second against a persisted `next_dispatch_epoch_ms` rather than sleeping out one long committed interval, and the on-screen countdown can be tapped to force a task immediately. Background alarm is re-armed from the same persisted epoch.

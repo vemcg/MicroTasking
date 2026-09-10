@@ -98,6 +98,19 @@ deliberate — just do the task immediately.
   own Start/Defer or Complete/Abandoned actions depending on whether it's been started, plus
   its own elapsed/remaining-time indicator.
 
+## Prompt cadence
+- New prompts are dispatched on a **fixed interval**, recomputed on every scheduling tick
+  (window open, each background alarm, app reopen) from the queue's fill level:
+  - **Below half full** → dispatch one now; the next interval spreads the remaining
+    *prompts-per-day − 1* dispatches evenly across the whole active window.
+  - **Half or more full** → skip this dispatch; the next interval paces *prompts-per-day*
+    across the time left in the window.
+- The active window closing **no longer clears the queue** — a carried-over task simply
+  waits until it's done or pushed off the top of a full queue.
+- The task screen shows a live **H:MM:SS countdown** to the next dispatch; tapping it forces
+  a task immediately and re-paces (a no-op when the queue is already full, except in
+  rapid-testing mode where it evicts the oldest).
+
 ## Timing & scoring
 - Each task tracks actual elapsed Start→Complete time (see "Per-task duration adaptation").
   There is no fixed deadline/budget auto-fail anymore — a task only fails via stack-eviction
@@ -114,6 +127,11 @@ deliberate — just do the task immediately.
 ## History & stats
 - Full stats & streak tracking: per-task completion log, timing (prompt time → complete time),
   streaks, and the three score metrics over time.
+- Two streaks are tracked separately:
+  - **Consecutive completions** ("N in a row") — resets on any abandon/timeout and at midnight.
+  - **Clean-day streak** — consecutive days that had at least one completion and no
+    abandon/timeout. An idle day (e.g. prompts-per-day set to 0, nothing done) leaves it
+    unchanged rather than breaking it. Shown on the Score screen.
 
 ## Storage
 - **Local-first.** All data — score/history, task pool, categories, settings — lives on-device

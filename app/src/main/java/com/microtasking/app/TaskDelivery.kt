@@ -93,56 +93,43 @@ object TaskDelivery {
     }
 
     /**
-     * Millis until the next thing that needs to happen: either a delivery, or - if that would be
-     * later than the window closing - the window close itself, so a leftover queue gets abandoned
-     * right when the window closes instead of sitting stale until whenever the app next happens
-     * to check. Null only when nothing should run right now: outside the window AND not manually
-     * forced on (a manual Resume outside the configured window - e.g. for testing - keeps this
-     * pacing normally instead of waiting for the window to open; see reconcileState/deliverOrConsumeSlot).
+     * Result of one [tick]: [nextDelayMillis] is how long the caller should wait before ticking
+     * again (null = nothing to schedule right now), [dispatched] is whether a task was actually
+     * added to the queue (the caller decides whether to notify), and [queueFull] flags a forced
+     * dispatch that did nothing because the queue was already at capacity (normal mode only).
      */
-    fun computeNextDelayMillis(context: Context): Long? {
-        val settings = loadSettings(context) ?: return null
-        val prefs = prefs(context)
-        val now = LocalDateTime.now()
-        val withinWindow = isWithinActiveWindow(now, settings.startHour, settings.endHour)
-        val backgroundPromptsEnabled = prefs.getBoolean("background_prompts_enabled", true)
-        if (!withinWindow && !backgroundPromptsEnabled) {
-            return millisUntilWindowOpens(now, settings.startHour, settings.endHour)
-        }
-        val deliveredInWindow = if (now.toLocalDate().toEpochDay() == prefs.getLong("prompts_count_epoch_day", -1L)) {
-            prefs.getInt("prompts_delivered_in_window", 0)
-        } else {
-            0
-        }
-        val deliveryDelay = nextPromptDelayMillis(now, settings.startHour, settings.endHour, settings.promptsPerDay, deliveredInWindow)
-        val closeDelay = if (withinWindow) millisUntilWindowCloses(now, settings.startHour, settings.endHour) else null
-        return if (closeDelay == null) deliveryDelay else if (deliveryDelay == null) closeDelay else minOf(deliveryDelay, closeDelay)
-    }
+    data class TickResult(val nextDelayMillis: Long?, val dispatched: Boolean, val queueFull: Boolean)
 
     private class ReconciledState(
         var queue: List<TaskStackEntry>,
         var streak: Int,
         val longestStreak: Int,
-        var deliveredInWindow: Int,
-        var countEpochDay: Long,
+        var lastDay: Long,
         var windowStartEpoch: Long,
         var backgroundPromptsEnabled: Boolean,
         var timeoutStreak: Int,
         var lastOutcome: TaskLifecycleState,
-        var withinWindow: Boolean
+        var withinWindow: Boolean,
+        var cleanDayStreak: Int,
+        var cleanDayStreakLongest: Int,
+        var dayHadCompletion: Boolean,
+        var dayHadFailure: Boolean
     ) {
         fun persist(prefs: SharedPreferences) {
             prefs.edit()
                 .putString("task_queue", writeTaskQueue(queue))
                 .putInt("streak", streak)
                 .putInt("longest_streak", maxOf(longestStreak, streak))
-                .putInt("prompts_delivered_in_window", deliveredInWindow)
-                .putLong("prompts_count_epoch_day", countEpochDay)
+                .putLong("last_reconcile_day", lastDay)
                 .putLong("prompts_window_start_epoch", windowStartEpoch)
                 .putBoolean("background_prompts_enabled", backgroundPromptsEnabled)
                 .putInt("timeout_streak", timeoutStreak)
                 .putString("last_outcome", lastOutcome.name)
                 .putBoolean("prompts_within_window", withinWindow)
+                .putInt("clean_day_streak", cleanDayStreak)
+                .putInt("clean_day_streak_longest", maxOf(cleanDayStreakLongest, cleanDayStreak))
+                .putBoolean("day_had_completion", dayHadCompletion)
+                .putBoolean("day_had_failure", dayHadFailure)
                 .apply()
         }
     }
@@ -150,28 +137,19 @@ object TaskDelivery {
     /**
      * Reconciles persisted state against wall-clock reality. Three independent things can happen
      * here, matched to reality rather than to each other:
-     *  - The active window just closed (we were inside it on the previous reconcile, now we're
-     *    not): anything still actionable in the queue is abandoned (scored the same as a manual
-     *    Abandon), the streak resets, and the queue is automatically turned off
-     *    (backgroundPromptsEnabled = false) - this is what "the window closed" means. Keyed off
-     *    the inside->outside *transition*, not off "currently outside the window" - otherwise a
-     *    manual Resume driving the queue outside the configured window (for testing) would have
-     *    each freshly-delivered task abandoned and delivery flipped back off one tick later, on
-     *    every tick. Because it's transition-keyed it also fires exactly once per close and won't
-     *    re-clobber a manual Resume pressed afterward (see below).
-     *  - The calendar day has changed since the delivery count was last reset: the daily count
-     *    resets to 0, and so does the streak - a streak is a daily thing, and rolling into a new
-     *    day always starts it fresh even if nothing was technically abandoned (e.g. an
-     *    always-active window, which never "closes" and so never hits the abandon-driven reset
-     *    above on its own). Tied to midnight, not to window open/close, so a manual pause
-     *    spanning a midnight still gets this right without needing the window to cycle first.
-     *  - A new window occurrence beginning: automatically turns the queue on
-     *    (backgroundPromptsEnabled = true). If the queue somehow isn't empty at this point (it
-     *    should always be empty, since close already cleared it), open leaves it alone and simply
-     *    builds on top of it rather than abandoning/scoring it a second time.
+     *  - The active window just closed (inside it on the previous reconcile, outside it now):
+     *    delivery is automatically paused (backgroundPromptsEnabled = false). The queue is left
+     *    intact - a carried-over task simply waits until the user does it or it gets pushed off
+     *    the top. Keyed off the inside->outside *transition* so it fires exactly once per close
+     *    and won't re-clobber a manual Resume pressed afterward.
+     *  - The calendar day has changed: the per-task "N in a row" streak resets (it's a within-day
+     *    thing), and the clean-day streak absorbs the day(s) that just ended - a day with a
+     *    failure resets it, a day with a completion and no failure advances it, an idle day
+     *    leaves it alone. A multi-day gap (app closed over a weekend) collapses to one evaluation.
+     *  - A new window occurrence beginning: automatically resumes delivery
+     *    (backgroundPromptsEnabled = true).
      * Outside of these automatic transitions, backgroundPromptsEnabled is left alone - a manual
-     * Pause/Resume (e.g. to test behavior outside the configured window) sticks until the next
-     * automatic transition touches it.
+     * Pause/Resume sticks until the next automatic transition touches it.
      */
     private fun reconcileState(prefs: SharedPreferences, settings: Settings, now: LocalDateTime): ReconciledState {
         val withinWindow = isWithinActiveWindow(now, settings.startHour, settings.endHour)
@@ -182,32 +160,38 @@ object TaskDelivery {
             queue = readTaskQueue(prefs.getString("task_queue", "[]") ?: "[]"),
             streak = prefs.getInt("streak", 0),
             longestStreak = prefs.getInt("longest_streak", 0),
-            deliveredInWindow = prefs.getInt("prompts_delivered_in_window", 0),
-            countEpochDay = prefs.getLong("prompts_count_epoch_day", -1L),
+            // Fall back to the pre-rework day key so an upgrade doesn't read as a spurious
+            // midnight rollover and reset the per-task streak on first launch.
+            lastDay = prefs.getLong("last_reconcile_day", prefs.getLong("prompts_count_epoch_day", -1L)),
             windowStartEpoch = prefs.getLong("prompts_window_start_epoch", 0L),
             backgroundPromptsEnabled = prefs.getBoolean("background_prompts_enabled", true),
             timeoutStreak = prefs.getInt("timeout_streak", 0),
             lastOutcome = runCatching {
                 TaskLifecycleState.valueOf(prefs.getString("last_outcome", TaskLifecycleState.COMPLETED.name)!!)
             }.getOrDefault(TaskLifecycleState.COMPLETED),
-            withinWindow = withinWindow
+            withinWindow = withinWindow,
+            cleanDayStreak = prefs.getInt("clean_day_streak", 0),
+            cleanDayStreakLongest = prefs.getInt("clean_day_streak_longest", 0),
+            dayHadCompletion = prefs.getBoolean("day_had_completion", false),
+            dayHadFailure = prefs.getBoolean("day_had_failure", false)
         )
 
         if (wasWithinWindow && !withinWindow) {
-            if (state.queue.any { it.isActionable() }) {
-                state.queue = state.queue.map { if (it.isActionable()) it.abandon() else it }
-                state.streak = 0
-                state.timeoutStreak = 0
-                state.lastOutcome = TaskLifecycleState.ABANDONED
-            }
             state.backgroundPromptsEnabled = false
         }
 
         val today = now.toLocalDate().toEpochDay()
-        if (today != state.countEpochDay) {
-            state.deliveredInWindow = 0
-            state.countEpochDay = today
+        if (today != state.lastDay) {
             state.streak = 0
+            if (state.lastDay >= 0L) {
+                state.cleanDayStreak = rolledCleanDayStreak(
+                    state.cleanDayStreak, state.dayHadCompletion, state.dayHadFailure
+                )
+                state.cleanDayStreakLongest = maxOf(state.cleanDayStreakLongest, state.cleanDayStreak)
+            }
+            state.dayHadCompletion = false
+            state.dayHadFailure = false
+            state.lastDay = today
         }
 
         val newWindowStart = currentWindowStart(now, settings.startHour, settings.endHour).toEpochMillis()
@@ -232,50 +216,110 @@ object TaskDelivery {
     }
 
     /**
-     * Runs one delivery slot: reconciles state (see [reconcileState]), then either adds a task to
-     * the queue or, if paused, does nothing. Delivery is gated purely on backgroundPromptsEnabled,
-     * not on window membership directly - reconcileState keeps that flag in sync with the window
-     * automatically (on at open, off at close), but a manual Resume pressed outside the configured
-     * window (e.g. to test) is honored here rather than silently blocked. The per-day delivery
-     * count only ticks while genuinely inside the real window, though: a manual test session
-     * outside it deliberately doesn't burn through the normal daily pacing budget, and a long
-     * pause *inside* the window still ticks silently so resuming doesn't cram in a catch-up burst.
-     * Returns true if a task was actually added (the caller decides whether to notify from that).
+     * Runs one pacing tick: reconciles state (see [reconcileState]), decides whether to add a task
+     * to the queue, computes the fixed interval until the next tick, and persists everything
+     * (including next_dispatch_epoch_ms, which drives the on-screen countdown and the background
+     * alarm). The dispatch decision is a plain queue-fill check:
+     *  - Below half full (or a forced tap) -> add a task now. Next interval spreads the remaining
+     *    N-1 dispatches across the whole window.
+     *  - Half or more full -> skip. Next interval is paced across the time left in the window.
+     * A task is only ever timed out by being pushed off the top - which now only happens on a
+     * forced dispatch while the queue is already at capacity, and only in rapid-testing mode
+     * (a normal-mode forced tap into a full queue is a no-op, flagged via [TickResult.queueFull]).
+     * Delivery is gated on backgroundPromptsEnabled (kept in sync with the window by
+     * reconcileState) unless [force] is set.
      */
-    fun deliverOrConsumeSlot(context: Context): Boolean {
-        val settings = loadSettings(context) ?: return false
+    fun tick(context: Context, force: Boolean = false): TickResult {
+        val settings = loadSettings(context) ?: return TickResult(null, dispatched = false, queueFull = false)
         val prefs = prefs(context)
         val now = LocalDateTime.now()
         val state = reconcileState(prefs, settings, now)
-        val withinWindow = isWithinActiveWindow(now, settings.startHour, settings.endHour)
 
-        var taskAdded = false
-        if (state.backgroundPromptsEnabled) {
-            val activeTasks = state.queue.filter { it.isActionable() }
+        if (!state.backgroundPromptsEnabled && !force) {
+            state.persist(prefs)
+            val editor = prefs.edit()
+            val result = if (isWithinActiveWindow(now, settings.startHour, settings.endHour)) {
+                // Paused by the user while the window is open: nothing is scheduled until Resume.
+                editor.remove("next_dispatch_epoch_ms")
+                TickResult(null, dispatched = false, queueFull = false)
+            } else {
+                // Auto-paused outside the window: wait for the window to open.
+                val delay = millisUntilWindowOpens(now, settings.startHour, settings.endHour)
+                editor.putLong("next_dispatch_epoch_ms", now.toEpochMillis() + delay)
+                TickResult(delay, dispatched = false, queueFull = false)
+            }
+            editor.apply()
+            return result
+        }
+
+        if (settings.promptsPerDay <= 0) {
+            state.persist(prefs)
+            prefs.edit().remove("next_dispatch_epoch_ms").apply()
+            return TickResult(null, dispatched = false, queueFull = false)
+        }
+
+        val actionable = state.queue.filter { it.isActionable() }
+        val activeCount = actionable.size
+        val underHalf = activeCount * 2 < settings.maxQueueSize
+        val atCapacity = activeCount >= settings.maxQueueSize
+
+        var dispatched = false
+        var queueFull = false
+
+        if (force && atCapacity && !isRapidTestingMode(settings.promptsPerDay)) {
+            // Normal mode: a manual "give me one now" tap does nothing while the queue is full.
+            queueFull = true
+        } else if (force || underHalf) {
             val keepCount = (settings.maxQueueSize - 1).coerceAtLeast(0)
-            if (activeTasks.size >= settings.maxQueueSize) {
-                // The oldest entries beyond keepCount are about to be pushed off the queue by
-                // the new arrival below without the user ever having acted on them - that's a
-                // timeout, not a completion, and needs to be recorded as such rather than
-                // silently vanishing.
-                val timedOutCount = activeTasks.size - keepCount
+            if (activeCount >= settings.maxQueueSize) {
+                // Only reachable via a forced dispatch in rapid-testing mode: the oldest actionable
+                // entries are about to be pushed off the top by the new arrival without the user
+                // ever having acted on them - that's a timeout.
+                val timedOutCount = activeCount - keepCount
                 state.streak = 0
                 state.timeoutStreak += timedOutCount
                 state.lastOutcome = TaskLifecycleState.TIMED_OUT
+                state.dayHadFailure = true
+                state.cleanDayStreak = 0
             }
             val nextTask = chooseWeightedTask(
                 tasks = settings.promptTasks,
                 activeCategoryOrder = settings.activeCategoryOrder,
-                previousTaskId = activeTasks.lastOrNull()?.task?.id
+                previousTaskId = actionable.lastOrNull()?.task?.id
             )
-            state.queue = activeTasks.takeLast(keepCount) + TaskStackEntry(nextTask)
-            taskAdded = true
-        }
-        if (withinWindow) {
-            state.deliveredInWindow++
+            state.queue = actionable.takeLast(keepCount) + TaskStackEntry(nextTask)
+            dispatched = true
         }
 
+        val interval = fixedDispatchIntervalMillis(
+            now, settings.startHour, settings.endHour, settings.promptsPerDay, dispatched
+        )
         state.persist(prefs)
-        return taskAdded
+        prefs.edit().apply {
+            if (interval == null) remove("next_dispatch_epoch_ms")
+            else putLong("next_dispatch_epoch_ms", now.toEpochMillis() + interval)
+        }.apply()
+        return TickResult(interval, dispatched, queueFull)
+    }
+
+    /**
+     * Read-only: when the next dispatch is due, as an epoch-millis instant. Uses the value the
+     * last [tick] persisted; falls back to a fresh interval computation when nothing is stored
+     * yet. Never dispatches - safe for arming the background alarm.
+     */
+    fun nextDispatchEpoch(context: Context): Long? {
+        val prefs = prefs(context)
+        val stored = prefs.getLong("next_dispatch_epoch_ms", 0L)
+        if (stored > 0L) return stored
+        val settings = loadSettings(context) ?: return null
+        val now = LocalDateTime.now()
+        // Manually paused while the window is open: nothing is scheduled until Resume.
+        if (!prefs.getBoolean("background_prompts_enabled", true) &&
+            isWithinActiveWindow(now, settings.startHour, settings.endHour)
+        ) return null
+        val interval = fixedDispatchIntervalMillis(
+            now, settings.startHour, settings.endHour, settings.promptsPerDay, dispatched = false
+        ) ?: return null
+        return now.toEpochMillis() + interval
     }
 }

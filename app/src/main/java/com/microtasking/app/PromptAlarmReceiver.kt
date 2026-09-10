@@ -23,7 +23,7 @@ class PromptAlarmReceiver : BroadcastReceiver() {
             return
         }
         Log.i("MicroTasking", "Background prompt alarm received")
-        if (TaskDelivery.deliverOrConsumeSlot(context)) {
+        if (TaskDelivery.tick(context).dispatched) {
             PromptNotifier.show(context)
         }
         PromptScheduler.scheduleNext(context)
@@ -71,10 +71,12 @@ object PromptScheduler {
     private const val REQUEST_CODE = 1002
 
     fun scheduleNext(context: Context) {
-        val delayMillis = TaskDelivery.computeNextDelayMillis(context) ?: run {
-            Log.i("MicroTasking", "Nothing to schedule (setup incomplete, no eligible tasks, or prompts disabled)")
+        val epoch = TaskDelivery.nextDispatchEpoch(context) ?: run {
+            Log.i("MicroTasking", "Nothing to schedule (setup incomplete, no eligible tasks, or prompts per day is 0)")
             return
         }
+        // Never fire tighter than the pacing floor, even if the stored epoch is already past.
+        val triggerAt = maxOf(epoch, System.currentTimeMillis() + 30_000L)
         val intent = Intent(context, PromptAlarmReceiver::class.java)
         val pendingIntent = PendingIntent.getBroadcast(
             context,
@@ -83,11 +85,7 @@ object PromptScheduler {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val alarmManager = context.getSystemService(AlarmManager::class.java)
-        alarmManager.setAndAllowWhileIdle(
-            AlarmManager.RTC_WAKEUP,
-            System.currentTimeMillis() + delayMillis,
-            pendingIntent
-        )
+        alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pendingIntent)
     }
 
     fun cancel(context: Context) {

@@ -17,53 +17,53 @@ class TaskSchedulingTest {
     }
 
     @Test
-    fun nextPromptDelayMillis_insideWindow_pacesAgainstRealCloseTime() {
-        // 10:00, window 9-21 (11h total, 1h elapsed), 2 prompts already delivered of 6 - paces
-        // against the ~10h actually left in the window, same as before this function was reworked
-        // to support a manual override outside the window.
+    fun activeWindowLengthMillis_normalWraparoundAndAlwaysActive() {
+        assertEquals(12 * 60 * 60 * 1000L, activeWindowLengthMillis(startHour = 9, endHour = 21))
+        // 22 -> 6 wraps past midnight: 8 hours.
+        assertEquals(8 * 60 * 60 * 1000L, activeWindowLengthMillis(startHour = 22, endHour = 6))
+        // start == end means always active: a flat 24h.
+        assertEquals(24 * 60 * 60 * 1000L, activeWindowLengthMillis(startHour = 9, endHour = 9))
+    }
+
+    @Test
+    fun fixedDispatchIntervalMillis_dispatchCase_dividesWholeWindowByNMinusOne() {
+        // 10:00, window 9-21 (12h window), previous tick dispatched, N = 5 -> 12h / 4 = 3h.
         val now = LocalDateTime.of(2026, 1, 5, 10, 0)
-        val delay = nextPromptDelayMillis(now, startHour = 9, endHour = 21, promptsPerDay = 6, promptsDeliveredInWindow = 2)
-        assertTrue(delay != null && delay > 0)
-        val remainingWindowMillis = 10 * 60 * 60 * 1000L
-        assertTrue("expected delay to fit within the remaining window, was $delay", delay!! <= remainingWindowMillis)
+        val interval = fixedDispatchIntervalMillis(now, startHour = 9, endHour = 21, promptsPerDay = 5, dispatched = true)
+        assertEquals(3 * 60 * 60 * 1000L, interval)
     }
 
     @Test
-    fun nextPromptDelayMillis_outsideWindow_stillPaces_forManualOverride() {
-        // 2:00am, window 9-21 (genuinely closed) - the window gate now lives in
-        // TaskDelivery.computeNextDelayMillis, not here, so a caller that has already decided to
-        // deliver anyway (a manual Resume outside the window, for testing) gets real pacing math
-        // back instead of null/"wait for window to open".
-        val now = LocalDateTime.of(2026, 1, 5, 2, 0)
-        val delay = nextPromptDelayMillis(now, startHour = 9, endHour = 21, promptsPerDay = 6, promptsDeliveredInWindow = 0)
-        assertTrue("expected a real pacing delay outside the window, got $delay", delay != null && delay > 0)
-        // No real window to close against, so it's treated like a flat 24h - never inflated much
-        // beyond that even with only one prompt left.
-        val twentyFourHours = 24 * 60 * 60 * 1000L
-        assertTrue(delay!! <= twentyFourHours)
-    }
-
-    @Test
-    fun nextPromptDelayMillis_quotaExhausted_returnsNull() {
+    fun fixedDispatchIntervalMillis_skipCase_dividesRemainingWindowByN() {
+        // 10:00, window 9-21 -> 11h left, previous tick skipped, N = 11 -> 11h / 11 = 1h.
         val now = LocalDateTime.of(2026, 1, 5, 10, 0)
-        assertNull(nextPromptDelayMillis(now, startHour = 9, endHour = 21, promptsPerDay = 6, promptsDeliveredInWindow = 6))
+        val interval = fixedDispatchIntervalMillis(now, startHour = 9, endHour = 21, promptsPerDay = 11, dispatched = false)
+        assertEquals(60 * 60 * 1000L, interval)
     }
 
     @Test
-    fun nextPromptDelayMillis_normalMode_floorsAtThirtySeconds() {
-        // Only meaningful while rapid testing mode is off - promptsPerDay must stay under the
-        // 1000 threshold or this floor check exercises the rapid 5s floor instead.
-        val now = LocalDateTime.of(2026, 1, 5, 20, 59)
-        val delay = nextPromptDelayMillis(now, startHour = 9, endHour = 21, promptsPerDay = 500, promptsDeliveredInWindow = 0)
-        assertTrue(delay == null || delay >= 30_000L)
-    }
-
-    @Test
-    fun nextPromptDelayMillis_rapidTestingMode_floorsAtFiveSeconds() {
+    fun fixedDispatchIntervalMillis_zeroPromptsPerDay_returnsNull() {
         val now = LocalDateTime.of(2026, 1, 5, 10, 0)
-        val delay = nextPromptDelayMillis(now, startHour = 9, endHour = 21, promptsPerDay = 20_000, promptsDeliveredInWindow = 0)
-        assertTrue(delay != null)
-        assertTrue("expected the 5s rapid-testing floor, got $delay", delay!! in 5_000L..7_500L)
+        assertNull(fixedDispatchIntervalMillis(now, startHour = 9, endHour = 21, promptsPerDay = 0, dispatched = true))
+    }
+
+    @Test
+    fun fixedDispatchIntervalMillis_floors_normalAndRapid() {
+        val now = LocalDateTime.of(2026, 1, 5, 9, 5)
+        // Many prompts in a 1h window rounds to well under the 30s normal-mode floor.
+        val normal = fixedDispatchIntervalMillis(now, startHour = 9, endHour = 10, promptsPerDay = 200, dispatched = true)
+        assertEquals(30_000L, normal)
+        // Rapid-testing mode drops the floor to 5s.
+        val rapid = fixedDispatchIntervalMillis(now, startHour = 9, endHour = 21, promptsPerDay = 20_000, dispatched = true)
+        assertEquals(5_000L, rapid)
+    }
+
+    @Test
+    fun rolledCleanDayStreak_advancesOnCleanDay_resetsOnFailure_holdsOnIdle() {
+        assertEquals(4, rolledCleanDayStreak(current = 3, hadCompletion = true, hadFailure = false))
+        assertEquals(0, rolledCleanDayStreak(current = 9, hadCompletion = true, hadFailure = true))
+        assertEquals(0, rolledCleanDayStreak(current = 9, hadCompletion = false, hadFailure = true))
+        assertEquals(5, rolledCleanDayStreak(current = 5, hadCompletion = false, hadFailure = false))
     }
 
     @Test
