@@ -101,13 +101,13 @@ class MainActivity : ComponentActivity() {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), NOTIFICATION_PERMISSION_REQUEST)
         }
         if (preferences.getBoolean("setup_complete", false)) {
-            // A fresh launch always (re)starts delivery, regardless of whatever paused state was
-            // in effect before the app was last closed - pausing only lasts for the current
-            // running session, not across a full restart.
-            preferences.edit().putBoolean("background_prompts_enabled", true).apply()
             // Catches up on any day/window rollover that happened while the app was closed,
             // before the streak/queue below get read into UI state - otherwise a stale streak
-            // could show until whichever delivery tick happens to run first.
+            // could show until whichever delivery tick happens to run first. Deliberately does
+            // NOT force background_prompts_enabled back on here - a manual pause must survive a
+            // relaunch (the app can be killed and reopened between glances); only a manual
+            // Resume or the window's own open transition (handled inside reconcile) may clear
+            // it. See DEFECTS.md item 4.
             TaskDelivery.reconcile(this)
         }
         setContent {
@@ -122,7 +122,11 @@ class MainActivity : ComponentActivity() {
                         startHour = preferences.getString("start_hour", "9") ?: "9",
                         endHour = preferences.getString("end_hour", "21") ?: "21",
                         promptsPerDay = preferences.getString("prompts_per_day", "6") ?: "6",
-                        maxQueueSize = preferences.getInt("max_task_queue_size", 3),
+                        // Coerced defensively - this feeds List.take() in makeTaskStack below,
+                        // which throws on a negative count. The Settings Save button already
+                        // clamps to >= 1 before persisting, but an older build or a value poked
+                        // directly into SharedPreferences (e.g. over adb) could still be <= 0.
+                        maxQueueSize = preferences.getInt("max_task_queue_size", 3).coerceAtLeast(1),
                         externalSheetUrl = preferences.getString("external_sheet_url", "") ?: "",
                         managedTasks = readManagedTasks(
                             preferences.getString("managed_tasks", "[]") ?: "[]"
@@ -141,8 +145,13 @@ class MainActivity : ComponentActivity() {
                             TaskLifecycleState.valueOf(preferences.getString("last_outcome", TaskLifecycleState.COMPLETED.name)!!)
                         }.getOrDefault(TaskLifecycleState.COMPLETED),
                         initialCompletionLog = readCompletionLog(preferences.getString("completion_log", "[]") ?: "[]"),
+                        initialVacationMode = preferences.getBoolean("vacation_mode", false),
                         onSettingsSaved = { categories, start, end, prompts, maxQueueSize, sheetUrl ->
-                            preferences.edit()
+                            // Only a first-time setup completion should force delivery on - an
+                            // ordinary settings edit later must not silently clobber a manual
+                            // pause (see DEFECTS.md item 4).
+                            val wasSetupComplete = preferences.getBoolean("setup_complete", false)
+                            val editor = preferences.edit()
                                 .putBoolean("setup_complete", true)
                                 .putStringSet("selected_categories", categories)
                                 .putString("start_hour", start)
@@ -150,8 +159,8 @@ class MainActivity : ComponentActivity() {
                                 .putString("prompts_per_day", prompts)
                                 .putInt("max_task_queue_size", maxQueueSize)
                                 .putString("external_sheet_url", sheetUrl)
-                                .putBoolean("background_prompts_enabled", true)
-                                .apply()
+                            if (!wasSetupComplete) editor.putBoolean("background_prompts_enabled", true)
+                            editor.apply()
                         },
                         onUserTasksSaved = { userTasks ->
                             preferences.edit()
@@ -178,6 +187,9 @@ class MainActivity : ComponentActivity() {
                             // cancelled anyway (onStart/onStop own it) and the live pacing loop
                             // reads this flag directly on every tick.
                             preferences.edit().putBoolean("background_prompts_enabled", enabled).apply()
+                        },
+                        onVacationModeChanged = { enabled ->
+                            preferences.edit().putBoolean("vacation_mode", enabled).apply()
                         }
                     )
                 }
@@ -230,12 +242,14 @@ fun MicroTaskingApp(
     initialCleanDayStreakLongest: Int,
     initialLastOutcome: TaskLifecycleState,
     initialCompletionLog: List<CompletionRecord>,
+    initialVacationMode: Boolean,
     onSettingsSaved: (Set<String>, String, String, String, Int, String) -> Unit,
     onUserTasksSaved: (List<UserTask>) -> Unit,
     onManagedTasksSaved: (List<ManagedTask>) -> Unit,
     onDeclineCountsSaved: (Map<String, Int>) -> Unit,
     onSheetUrlSaved: (String) -> Unit,
-    onBackgroundPromptsChanged: (Boolean) -> Unit
+    onBackgroundPromptsChanged: (Boolean) -> Unit,
+    onVacationModeChanged: (Boolean) -> Unit
 ) {
     var showingSettings by remember {
         mutableStateOf(!setupComplete || (managedTasks.isEmpty() && userTasks.isEmpty()))
@@ -262,6 +276,7 @@ fun MicroTaskingApp(
     var completionLog by remember { mutableStateOf(initialCompletionLog) }
     var scoreEntryToken by remember { mutableIntStateOf(0) }
     var backgroundPromptsRunning by remember { mutableStateOf(true) }
+    var vacationMode by remember { mutableStateOf(initialVacationMode) }
     var nextDispatchEpoch by remember { mutableStateOf<Long?>(null) }
     var clockMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var queueFullFlashUntil by remember { mutableLongStateOf(0L) }
@@ -350,6 +365,7 @@ fun MicroTaskingApp(
             TaskLifecycleState.valueOf(prefs.getString("last_outcome", TaskLifecycleState.COMPLETED.name)!!)
         }.getOrDefault(TaskLifecycleState.COMPLETED)
         backgroundPromptsRunning = prefs.getBoolean("background_prompts_enabled", true)
+        vacationMode = prefs.getBoolean("vacation_mode", false)
         nextDispatchEpoch = prefs.getLong("next_dispatch_epoch_ms", 0L).takeIf { it > 0L }
     }
 
@@ -458,6 +474,20 @@ fun MicroTaskingApp(
         }
     }
 
+    // Vacation mode is a hard override on top of Pause/Resume: while checked, TaskDelivery.tick
+    // refuses to dispatch or schedule anything - not even a forced tap - until this is unchecked
+    // again. Re-ticking here (both on check and uncheck) clears any stale countdown immediately
+    // and, on uncheck, re-paces right away instead of waiting out whatever was left.
+    fun setVacationMode(enabled: Boolean) {
+        vacationMode = enabled
+        onVacationModeChanged(enabled)
+        coroutineScope.launch {
+            withContext(Dispatchers.IO) { TaskDelivery.tick(context) }
+            refreshFromPrefs()
+            clockMillis = System.currentTimeMillis()
+        }
+    }
+
     if (showingQrScanner) {
         QrScannerScreen(
             onResult = { scannedUrl ->
@@ -499,12 +529,14 @@ fun MicroTaskingApp(
             isImportingSheet = isImportingSheet,
             importMessage = sheetImportMessage,
             backgroundPromptsRunning = backgroundPromptsRunning,
+            vacationMode = vacationMode,
             onOpenMyTasks = { showingMyTasks = true },
             onOpenTaskPool = { showingTaskPool = true },
             onOpenQrScanner = { showingQrScanner = true },
             onSyncSheet = { url -> runSheetImport(url) },
             onCancel = { if (setupComplete) showingSettings = false },
             onBackgroundPromptsChanged = { setBackgroundPrompts(it) },
+            onVacationModeChanged = { setVacationMode(it) },
             onSave = { categories, start, end, prompts, queueSize, sheetUrl ->
                 savedCategories = categories
                 savedStartHour = start
@@ -543,7 +575,12 @@ fun MicroTaskingApp(
             nextDispatchEpoch = nextDispatchEpoch,
             clockMillis = clockMillis,
             queueFullFlash = clockMillis < queueFullFlashUntil,
-            withinWindow = isWithinActiveWindow(LocalDateTime.now(), savedStartHour.toIntOrNull() ?: 0, savedEndHour.toIntOrNull() ?: 24),
+            withinWindow = isWithinActiveWindow(
+                LocalDateTime.now(),
+                (savedStartHour.toIntOrNull() ?: 9).coerceIn(0, 24),
+                (savedEndHour.toIntOrNull() ?: 21).coerceIn(0, 24)
+            ),
+            vacationMode = vacationMode,
             onForceDispatch = { forceDispatchNow() },
             onOpenSettings = { showingSettings = true },
             onOpenScore = {
@@ -574,15 +611,21 @@ fun MicroTaskingApp(
             onSubstitute = { taskId ->
                 // Not a decline and not scored - the point is that nothing about this task's
                 // outcome is being decided, it's simply being swapped for a different one in the
-                // same queue slot.
-                val queuedTaskIds = taskQueue.map { it.task.id }.toSet()
-                val candidates = promptTasks.filter { it.id !in queuedTaskIds }.ifEmpty { promptTasks }
-                val replacement = chooseWeightedTask(
-                    tasks = candidates,
-                    activeCategoryOrder = activeCategoryOrder,
-                    previousTaskId = taskId
-                )
-                persistTaskQueue(taskQueue.map { if (it.task.id == taskId) TaskStackEntry(replacement) else it })
+                // same queue slot. Guard against an empty pool: promptTasks is live (recomputed
+                // from current categories/tasks), so a still-queued task's Substitute button can
+                // be tapped after the user unchecked every category out from under it - with
+                // nothing to substitute in, chooseWeightedTask would crash on an empty list, so
+                // just no-op instead.
+                if (promptTasks.isNotEmpty()) {
+                    val queuedTaskIds = taskQueue.map { it.task.id }.toSet()
+                    val candidates = promptTasks.filter { it.id !in queuedTaskIds }.ifEmpty { promptTasks }
+                    val replacement = chooseWeightedTask(
+                        tasks = candidates,
+                        activeCategoryOrder = activeCategoryOrder,
+                        previousTaskId = taskId
+                    )
+                    persistTaskQueue(taskQueue.map { if (it.task.id == taskId) TaskStackEntry(replacement) else it })
+                }
             },
             onNextPrompt = {
                 persistTaskQueue(makeTaskStack(promptTasks, maxEntries = savedMaxQueueSize))
@@ -611,6 +654,7 @@ fun TaskPromptScreen(
     clockMillis: Long,
     queueFullFlash: Boolean,
     withinWindow: Boolean,
+    vacationMode: Boolean,
     backgroundPromptsRunning: Boolean,
     onForceDispatch: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -708,6 +752,7 @@ fun TaskPromptScreen(
 
         val countdownText = when {
             queueFullFlash -> "Queue full — finish one first"
+            vacationMode -> "On vacation — uncheck it in Settings to resume"
             promptsPerDay <= 0 -> "Automatic prompts off — set \"prompts per day\""
             !backgroundPromptsRunning && withinWindow -> "Paused — tap for a task now"
             !withinWindow && nextDispatchEpoch != null ->
@@ -847,12 +892,14 @@ fun SettingsScreen(
     isImportingSheet: Boolean = false,
     importMessage: String? = null,
     backgroundPromptsRunning: Boolean,
+    vacationMode: Boolean,
     onOpenMyTasks: () -> Unit,
     onOpenTaskPool: () -> Unit,
     onOpenQrScanner: () -> Unit,
     onSyncSheet: (String) -> Unit,
     onCancel: () -> Unit,
     onBackgroundPromptsChanged: (Boolean) -> Unit,
+    onVacationModeChanged: (Boolean) -> Unit,
     onSave: (Set<String>, String, String, String, Int, String) -> Unit
 ) {
     var selectedCategories by remember { mutableStateOf(initialCategories) }
@@ -998,6 +1045,23 @@ fun SettingsScreen(
                             ) {
                                 Text(if (backgroundPromptsRunning) "Pause task queue" else "Resume task queue")
                             }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = vacationMode,
+                                    onCheckedChange = onVacationModeChanged
+                                )
+                                Text("On vacation — stop everything until I uncheck this")
+                            }
+                            Text(
+                                "Overrides Pause/Resume and the active window entirely - while checked, nothing " +
+                                    "dispatches and nothing wakes the queue back up, not even at the start of the " +
+                                    "window. Uncheck it here to resume.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                             Text(
                                 "Configure your active daily window and prompt frequency.",
                                 style = MaterialTheme.typography.bodySmall,

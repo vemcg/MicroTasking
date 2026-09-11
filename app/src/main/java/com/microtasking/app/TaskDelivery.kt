@@ -82,11 +82,18 @@ object TaskDelivery {
         val promptTasks = eligiblePromptTasks(managedTasks, userTasks, selectedCategories)
         if (promptTasks.isEmpty()) return null
         val availableCategories = (managedTasks.map { it.category } + userTasks.map { it.category }).distinct()
+        // Settings.kt's Save button already clamps these before persisting, but this is the one
+        // chokepoint every scheduling computation (division included) reads through, so it's
+        // sanitized again here too - defends against a value saved by an older build (before
+        // those clamps existed), or one poked directly into SharedPreferences (e.g. over adb).
+        // Out-of-range hours can otherwise reach java.time.LocalTime.of(), which throws on a
+        // negative hour; a maxQueueSize <= 0 can reach List.take() with a negative count, which
+        // throws; a negative promptsPerDay would otherwise bypass the "<= 0 means off" checks.
         return Settings(
-            startHour = (prefs.getString("start_hour", "9") ?: "9").toIntOrNull() ?: 0,
-            endHour = (prefs.getString("end_hour", "21") ?: "21").toIntOrNull() ?: 24,
-            promptsPerDay = (prefs.getString("prompts_per_day", "6") ?: "6").toIntOrNull() ?: 0,
-            maxQueueSize = prefs.getInt("max_task_queue_size", 3),
+            startHour = ((prefs.getString("start_hour", "9") ?: "9").toIntOrNull() ?: 9).coerceIn(0, 24),
+            endHour = ((prefs.getString("end_hour", "21") ?: "21").toIntOrNull() ?: 21).coerceIn(0, 24),
+            promptsPerDay = ((prefs.getString("prompts_per_day", "6") ?: "6").toIntOrNull() ?: 6).coerceAtLeast(0),
+            maxQueueSize = prefs.getInt("max_task_queue_size", 3).coerceAtLeast(1),
             promptTasks = promptTasks,
             activeCategoryOrder = availableCategories.filter { it in selectedCategories }
         )
@@ -209,10 +216,10 @@ object TaskDelivery {
      * day or window boundary crossed while the app was closed wouldn't show up until whatever
      * happens to run the first delivery tick, which could be a long wait.
      */
-    fun reconcile(context: Context) {
+    fun reconcile(context: Context, now: LocalDateTime = LocalDateTime.now()) {
         val settings = loadSettings(context) ?: return
         val prefs = prefs(context)
-        reconcileState(prefs, settings, LocalDateTime.now()).persist(prefs)
+        reconcileState(prefs, settings, now).persist(prefs)
     }
 
     /**
@@ -232,21 +239,39 @@ object TaskDelivery {
      * Delivery is gated on backgroundPromptsEnabled (kept in sync with the window by
      * reconcileState) unless [force] is set.
      */
-    fun tick(context: Context, force: Boolean = false): TickResult {
+    fun tick(context: Context, force: Boolean = false, now: LocalDateTime = LocalDateTime.now()): TickResult {
         val settings = loadSettings(context) ?: return TickResult(null, dispatched = false, queueFull = false)
         val prefs = prefs(context)
-        val now = LocalDateTime.now()
         val state = reconcileState(prefs, settings, now)
 
-        if (!state.backgroundPromptsEnabled && !force) {
+        // Vacation mode is a hard override: nothing dispatches, not even a manual/forced tap,
+        // until the user goes into Settings and unchecks it themselves. Day/window bookkeeping
+        // above still runs so streaks don't go stale, but no next tick gets scheduled - not even
+        // the alarm gets armed (see nextDispatchEpoch below), so nothing wakes this up.
+        if (prefs.getBoolean("vacation_mode", false)) {
+            state.persist(prefs)
+            prefs.edit().remove("next_dispatch_epoch_ms").apply()
+            return TickResult(null, dispatched = false, queueFull = false)
+        }
+
+        // An automatic tick may never dispatch outside the active window, full stop - this is
+        // checked directly against the clock, not just via backgroundPromptsEnabled (which
+        // reconcileState keeps in sync with the window via edge-triggered transitions, but that's
+        // one more thing that can drift; dispatch itself shouldn't depend on nothing else in the
+        // codebase ever mis-setting that flag - see DEFECTS.md item 4). A forced/manual tap still
+        // bypasses both checks (existing "test outside the window" override).
+        val withinWindowNow = isWithinActiveWindow(now, settings.startHour, settings.endHour)
+        if (!force && (!state.backgroundPromptsEnabled || !withinWindowNow)) {
             state.persist(prefs)
             val editor = prefs.edit()
-            val result = if (isWithinActiveWindow(now, settings.startHour, settings.endHour)) {
+            val result = if (withinWindowNow) {
                 // Paused by the user while the window is open: nothing is scheduled until Resume.
                 editor.remove("next_dispatch_epoch_ms")
                 TickResult(null, dispatched = false, queueFull = false)
             } else {
-                // Auto-paused outside the window: wait for the window to open.
+                // Outside the window - auto-paused, or a manual pause taken outside it either
+                // way: wait for the window to open. The window-open transition is the one
+                // automatic thing (besides a manual Resume) allowed to clear a pause.
                 val delay = millisUntilWindowOpens(now, settings.startHour, settings.endHour)
                 editor.putLong("next_dispatch_epoch_ms", now.toEpochMillis() + delay)
                 TickResult(delay, dispatched = false, queueFull = false)
@@ -318,12 +343,13 @@ object TaskDelivery {
      * last [tick] persisted; falls back to a fresh interval computation when nothing is stored
      * yet. Never dispatches - safe for arming the background alarm.
      */
-    fun nextDispatchEpoch(context: Context): Long? {
+    fun nextDispatchEpoch(context: Context, now: LocalDateTime = LocalDateTime.now()): Long? {
         val prefs = prefs(context)
+        // On vacation: never arm anything, so nothing wakes this up until the box is unchecked.
+        if (prefs.getBoolean("vacation_mode", false)) return null
         val stored = prefs.getLong("next_dispatch_epoch_ms", 0L)
         if (stored > 0L) return stored
         val settings = loadSettings(context) ?: return null
-        val now = LocalDateTime.now()
         // Manually paused while the window is open: nothing is scheduled until Resume.
         if (!prefs.getBoolean("background_prompts_enabled", true) &&
             isWithinActiveWindow(now, settings.startHour, settings.endHour)

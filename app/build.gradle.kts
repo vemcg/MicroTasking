@@ -90,6 +90,30 @@ android {
         }
     }
 
+    // Lets JVM unit tests (testDebugUnitTest) exercise real Context/SharedPreferences via
+    // Robolectric instead of needing a device/emulator - see TaskDeliveryTest. The --add-opens
+    // flags are Robolectric's own documented requirement for running on JDK 17+ (it needs
+    // reflective access into internal OpenJDK classes); without them Robolectric fails at
+    // startup on any JDK newer than 16.
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = false
+            isReturnDefaultValues = true
+            all {
+                it.jvmArgs(
+                    "--add-opens=java.base/java.lang=ALL-UNNAMED",
+                    "--add-opens=java.base/java.util=ALL-UNNAMED",
+                    "--add-opens=java.base/java.io=ALL-UNNAMED",
+                    "--add-opens=java.base/java.net=ALL-UNNAMED",
+                    "--add-opens=java.base/java.security=ALL-UNNAMED",
+                    "--add-opens=java.base/java.text=ALL-UNNAMED",
+                    "--add-opens=java.base/jdk.internal.access=ALL-UNNAMED",
+                    "--add-opens=java.desktop/java.awt.font=ALL-UNNAMED"
+                )
+            }
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -127,4 +151,9 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20250517")
+    // Robolectric: runs JVM unit tests against a simulated Android framework, so tests that need
+    // a real Context/SharedPreferences (e.g. TaskDelivery.tick) run in `testDebugUnitTest` -
+    // fast, no device/emulator - instead of only being checkable on-device.
+    testImplementation("org.robolectric:robolectric:4.17")
+    testImplementation("androidx.test:core:1.6.1")
 }
