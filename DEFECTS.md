@@ -48,3 +48,5 @@ Root cause: `TaskDelivery.tick` picked the next task with `chooseWeightedTask(pr
 - `TaskDelivery.tick` now excludes every still-queued task id from the candidate pool before `chooseWeightedTask` (same guard `MainActivity`'s Substitute already used), and caps effective queue capacity at the eligible-pool size so a small pool can't force a repeat.
 - `readTaskQueue` collapses duplicate task ids on load (`distinctBy { it.task.id }`, first wins) — repairs already-corrupt persisted state from older builds, which is what breaks the crash-loop for anyone already stuck.
 - The task-queue `LazyColumn` key is now `"${id}#${index}"` so a duplicate can never crash the screen again.
+
+Verified on-device (build `v0.1.7-64`, Galaxy S23 / Android 16): the previously crash-looping install — whose persisted `task_queue` held the duplicate — now cold-launches cleanly (0 crashes over repeated launches), and `tick` grew the queue to full with three distinct tasks.
