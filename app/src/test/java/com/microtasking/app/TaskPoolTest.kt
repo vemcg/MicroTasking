@@ -40,6 +40,22 @@ class TaskPoolTest {
     }
 
     @Test
+    fun readTaskQueue_collapsesDuplicateTaskIds() {
+        val task = builtInTasks.first()
+        val one = TaskStackEntry(task)
+        // A queue persisted by an older build could carry two entries for the same task; the
+        // task screen keys its LazyColumn by task id and a duplicate key crashes it.
+        val json = writeTaskQueue(listOf(one, one.start(), TaskStackEntry(builtInTasks[1])))
+
+        val queue = readTaskQueue(json)
+
+        assertEquals(2, queue.size)
+        assertEquals(listOf(task.id, builtInTasks[1].id), queue.map { it.task.id })
+        // The first occurrence wins, so the un-started entry is the one kept.
+        assertEquals(TaskLifecycleState.READY, queue.first().state)
+    }
+
+    @Test
     fun taskLifecycle_transitionsAndRecordsStartTime() {
         val entry = TaskStackEntry(builtInTasks.first())
 

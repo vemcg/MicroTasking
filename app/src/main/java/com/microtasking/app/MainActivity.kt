@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -655,7 +656,9 @@ fun TaskPromptScreen(
                 )
             }
 
-            items(taskEntries, key = { it.task.id }) { entry ->
+            // Key by id + position: ids are unique in a healthy queue, but a duplicate key is a
+            // hard crash, so the index keeps it safe even if a stale/corrupt queue slips one in.
+            itemsIndexed(taskEntries, key = { index, entry -> "${entry.task.id}#$index" }) { _, entry ->
                 val task = entry.task
                 Column(
                     modifier = Modifier

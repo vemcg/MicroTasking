@@ -167,7 +167,10 @@ fun readTaskQueue(json: String): List<TaskStackEntry> = runCatching {
             completedAtEpochMs = entry.optNullableLong("completedAtEpochMs")
         )
     }
-}.getOrDefault(emptyList())
+    // The queue must never hold two entries for the same task - the task screen keys its
+    // LazyColumn by task id and a duplicate key is a hard crash. Persisted state from an older
+    // build could still carry one, so collapse them here (keep the first / oldest occurrence).
+}.getOrDefault(emptyList()).distinctBy { it.task.id }
 
 fun writeTaskQueue(queue: List<TaskStackEntry>): String = JSONArray().apply {
     queue.forEach { entry ->

@@ -263,7 +263,11 @@ object TaskDelivery {
 
         val actionable = state.queue.filter { it.isActionable() }
         val activeCount = actionable.size
-        val atCapacity = activeCount >= settings.maxQueueSize
+        // The queue can't hold more distinct tasks than the eligible pool has - otherwise a new
+        // dispatch would have to repeat one already queued, and the task screen crashes on a
+        // duplicate LazyColumn key. Cap the effective capacity at the pool size.
+        val effectiveMaxQueueSize = minOf(settings.maxQueueSize, settings.promptTasks.size)
+        val atCapacity = activeCount >= effectiveMaxQueueSize
 
         var dispatched = false
         var queueFull = false
@@ -272,8 +276,9 @@ object TaskDelivery {
             // Normal mode: a manual "give me one now" tap does nothing while the queue is full.
             queueFull = true
         } else {
-            val keepCount = (settings.maxQueueSize - 1).coerceAtLeast(0)
-            if (activeCount >= settings.maxQueueSize) {
+            val keepCount = (effectiveMaxQueueSize - 1).coerceAtLeast(0)
+            val kept = actionable.takeLast(keepCount)
+            if (activeCount > keepCount) {
                 // The queue is full and a new task is arriving anyway (automatic cadence, or a
                 // forced tap in rapid-testing mode): the oldest actionable entries get pushed off
                 // the top without the user ever having acted on them - that's a timeout.
@@ -284,12 +289,16 @@ object TaskDelivery {
                 state.dayHadFailure = true
                 state.cleanDayStreak = 0
             }
+            // Never hand back a task that's still sitting in the queue.
+            val keptIds = kept.mapTo(mutableSetOf()) { it.task.id }
+            val candidates = settings.promptTasks.filterNot { it.id in keptIds }
+                .ifEmpty { settings.promptTasks }
             val nextTask = chooseWeightedTask(
-                tasks = settings.promptTasks,
+                tasks = candidates,
                 activeCategoryOrder = settings.activeCategoryOrder,
-                previousTaskId = actionable.lastOrNull()?.task?.id
+                previousTaskId = kept.lastOrNull()?.task?.id
             )
-            state.queue = actionable.takeLast(keepCount) + TaskStackEntry(nextTask)
+            state.queue = kept + TaskStackEntry(nextTask)
             dispatched = true
         }
 
