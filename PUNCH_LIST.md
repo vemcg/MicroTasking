@@ -59,3 +59,13 @@ Next work session: make onboarding, import, the spreadsheet template, persistenc
    - ~~Open defect: manual Resume doesn't deliver promptly.~~ Fixed by the 2026-09-10 rework (see top of this item) — Resume runs `TaskDelivery.tick` immediately and the foreground loop polls a persisted epoch instead of sleeping out one long interval. [DEFECTS.md](DEFECTS.md) item 1.
    - Done: per-completion history for real per-period (today/this week/this month/all-time) stats — see the Persistent application state item.
    - Deferred by request: syncing any of this back to the Google Sheet.
+
+7. **In-app crash reporting** — *not started; scoped 2026-09-10. The app currently has zero crash reporting — today's duplicate-task crash-loop ([DEFECTS.md](DEFECTS.md) item 3) was only diagnosable because Vern's device was attached and `adb logcat -b crash` still had the trace.*
+   - Install `Thread.setDefaultUncaughtExceptionHandler` at startup. On crash, write one report file to app-private storage (overwrite, not a queue — a crash-loop must collapse to a single report). On the next launch, show a dismissible banner: "MicroTasking closed unexpectedly last time." — no mid-session popups.
+   - **Direction chosen: pre-filled GitHub issue.** Banner button opens `github.com/vemcg/MicroTasking/issues/new` with the trace in the body (repo is public, issues enabled). Also keep a "Copy" button for the paste-to-Claude workflow. Not doing automatic upload (Sentry/Crashlytics) unless real external users appear; not doing fixed-address email.
+   - **Duplicate suppression (Vern's requirement — he doesn't want 13+ identical issues from one loop):**
+     - On-device: fingerprint each crash (exception class + top few `com.microtasking.app` frames, hashed). If the same fingerprint already fired / was already reported, don't re-surface the banner (or show a muted "already reported" state). This alone kills the crash-loop case.
+     - Put the fingerprint in the issue title, e.g. `[crash] IllegalArgumentException @ MainActivity:658 (a3f2c1)`.
+     - Server-side backstop: a small `issues.opened` GitHub Action that reads the fingerprint, searches existing open issues, and if it finds a match, comments "another occurrence (vX.Y.Z-N, <device>)" on the original and closes the dup. Handles the "several users, same bug, over days" case that on-device dedup can't see.
+   - **Deferred:** report contents (trace-only vs. trace + device + persisted-state snapshot). The state snapshot is what made DEFECTS item 3 a fast diagnosis, but it embeds task descriptions. Decide when building.
+   - Until this ships, crash diagnosis = keep the test device attached and pull `adb logcat -b crash` / `adb exec-out run-as com.microtasking.app cat shared_prefs/…`.
