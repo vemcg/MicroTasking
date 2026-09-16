@@ -286,6 +286,19 @@ object TaskDelivery {
             return TickResult(null, dispatched = false, queueFull = false)
         }
 
+        // A non-forced call landing here before the already-armed next_dispatch_epoch_ms is due
+        // must not queue a task on top of whatever the last real dispatch already scheduled - it
+        // just reconciles bookkeeping and leaves the existing schedule alone. Without this, every
+        // unconditional "tick once" call site (app reopened, Pause/Resume, vacation toggled) would
+        // dispatch an extra task regardless of whether any real time had passed - see DEFECTS.md
+        // item 5. A forced tap, or a call that arrives once the epoch has actually elapsed
+        // (the foreground 1s poll, the background alarm), is unaffected.
+        val storedNextDispatch = prefs.getLong("next_dispatch_epoch_ms", 0L)
+        if (!force && storedNextDispatch > now.toEpochMillis()) {
+            state.persist(prefs)
+            return TickResult(null, dispatched = false, queueFull = false)
+        }
+
         val actionable = state.queue.filter { it.isActionable() }
         val activeCount = actionable.size
         // The queue can't hold more distinct tasks than the eligible pool has - otherwise a new
@@ -308,6 +321,12 @@ object TaskDelivery {
                 // forced tap in rapid-testing mode): the oldest actionable entries get pushed off
                 // the top without the user ever having acted on them - that's a timeout.
                 val timedOutCount = activeCount - keepCount
+                actionable.take(timedOutCount).forEach { evicted ->
+                    DiagnosticLog.log(
+                        context, "TIMED_OUT",
+                        "task=${evicted.task.id} category=${evicted.task.category}"
+                    )
+                }
                 state.streak = 0
                 state.timeoutStreak += timedOutCount
                 state.lastOutcome = TaskLifecycleState.TIMED_OUT
@@ -325,6 +344,10 @@ object TaskDelivery {
             )
             state.queue = kept + TaskStackEntry(nextTask)
             dispatched = true
+            DiagnosticLog.log(
+                context, "QUEUED",
+                "task=${nextTask.id} category=${nextTask.category} duration=${nextTask.durationMinutes}m"
+            )
         }
 
         val interval = fixedDispatchIntervalMillis(

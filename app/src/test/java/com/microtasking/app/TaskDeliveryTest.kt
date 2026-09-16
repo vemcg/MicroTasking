@@ -194,4 +194,71 @@ class TaskDeliveryTest {
         prefs.edit().putString("start_hour", "").putString("end_hour", "").commit()
         TaskDelivery.tick(context, force = false, now = insideWindow)
     }
+
+    // DEFECTS.md item 5: a non-forced tick() called again before the previously-armed
+    // next_dispatch_epoch_ms is due (app reopened, Pause/Resume or vacation mode toggled, a
+    // settings change) must not queue a second task on top of the one already scheduled.
+
+    @Test
+    fun tick_doesNotDoubleDispatch_whenCalledAgainBeforeScheduledEpoch() {
+        val first = TaskDelivery.tick(context, force = false, now = insideWindow)
+        assertTrue(first.dispatched)
+        assertEquals(1, queueSize())
+        val armedEpoch = prefs.getLong("next_dispatch_epoch_ms", -1L)
+
+        // Same instant, e.g. the app was reopened right after the background alarm delivered.
+        val second = TaskDelivery.tick(context, force = false, now = insideWindow)
+        assertFalse(second.dispatched)
+        assertEquals(1, queueSize())
+        // The original schedule is left untouched, not recomputed.
+        assertEquals(armedEpoch, prefs.getLong("next_dispatch_epoch_ms", -1L))
+    }
+
+    @Test
+    fun tick_dispatchesAgain_onceScheduledEpochHasElapsed() {
+        val first = TaskDelivery.tick(context, force = false, now = insideWindow)
+        assertTrue(first.dispatched)
+        val armedEpoch = prefs.getLong("next_dispatch_epoch_ms", 0L)
+        assertTrue(armedEpoch > insideWindow.toEpochMillis())
+
+        val due = java.time.Instant.ofEpochMilli(armedEpoch)
+            .atZone(java.time.ZoneId.systemDefault())
+            .toLocalDateTime()
+        val second = TaskDelivery.tick(context, force = false, now = due)
+        assertTrue(second.dispatched)
+    }
+
+    @Test
+    fun tick_forcedTap_stillDispatches_evenBeforeScheduledEpoch() {
+        // Two eligible tasks so the queue (max size 3) isn't already at capacity after the first
+        // dispatch - this test is about the not-due-yet gate, not the separate queueFull gate.
+        val secondTask = ManagedTask(
+            id = "test-task-2",
+            description = "Second test task",
+            category = "Testing",
+            durationMinutes = 5,
+            builtIn = false
+        )
+        prefs.edit()
+            .putString(
+                "managed_tasks",
+                writeManagedTasks(readManagedTasks(prefs.getString("managed_tasks", "[]")!!) + secondTask)
+            )
+            .commit()
+        TaskDelivery.tick(context, force = false, now = insideWindow)
+        assertEquals(1, queueSize())
+        val result = TaskDelivery.tick(context, force = true, now = insideWindow)
+        assertTrue(result.dispatched)
+        assertEquals(2, queueSize())
+    }
+
+    @Test
+    fun setBackgroundPromptsResume_doesNotDoubleDispatch_ifAlreadyScheduled() {
+        // Simulates: background alarm just dispatched, then the user reopens the app or taps
+        // Resume before the next scheduled dispatch is actually due.
+        TaskDelivery.tick(context, force = false, now = insideWindow)
+        assertEquals(1, queueSize())
+        TaskDelivery.tick(context, force = false, now = insideWindow.plusSeconds(1))
+        assertEquals(1, queueSize())
+    }
 }

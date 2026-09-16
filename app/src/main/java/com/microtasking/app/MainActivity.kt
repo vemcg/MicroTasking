@@ -93,6 +93,7 @@ import org.json.JSONObject
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        DiagnosticLog.log(this, "APP_START")
         val preferences = getSharedPreferences("microtasking_settings", MODE_PRIVATE)
         preferences.edit().putBoolean("app_in_foreground", true).apply()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
@@ -151,6 +152,16 @@ class MainActivity : ComponentActivity() {
                             // ordinary settings edit later must not silently clobber a manual
                             // pause (see DEFECTS.md item 4).
                             val wasSetupComplete = preferences.getBoolean("setup_complete", false)
+                            val before = "window=${preferences.getString("start_hour", "9")}-" +
+                                "${preferences.getString("end_hour", "21")} " +
+                                "prompts=${preferences.getString("prompts_per_day", "6")} " +
+                                "queueSize=${preferences.getInt("max_task_queue_size", 3)} " +
+                                "categories=${preferences.getStringSet("selected_categories", emptySet())?.sorted()}"
+                            val after = "window=$start-$end prompts=$prompts queueSize=$maxQueueSize " +
+                                "categories=${categories.sorted()}"
+                            if (wasSetupComplete && before != after) {
+                                DiagnosticLog.log(this, "SETTINGS_CHANGED", "before=[$before] after=[$after]")
+                            }
                             val editor = preferences.edit()
                                 .putBoolean("setup_complete", true)
                                 .putStringSet("selected_categories", categories)
@@ -199,6 +210,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        DiagnosticLog.log(this, "APP_FOREGROUND")
         getSharedPreferences("microtasking_settings", MODE_PRIVATE)
             .edit()
             .putBoolean("app_in_foreground", true)
@@ -210,10 +222,23 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
+        DiagnosticLog.log(this, "APP_BACKGROUND")
         val preferences = getSharedPreferences("microtasking_settings", MODE_PRIVATE)
         preferences.edit().putBoolean("app_in_foreground", false).apply()
         if (preferences.getBoolean("setup_complete", false)) {
             PromptScheduler.scheduleNext(this)
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == NOTIFICATION_PERMISSION_REQUEST) {
+            val granted = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
+            DiagnosticLog.log(this, "PERMISSION", "POST_NOTIFICATIONS ${if (granted) "granted" else "denied"}")
         }
     }
 
@@ -428,7 +453,10 @@ fun MicroTaskingApp(
             return@LaunchedEffect
         }
         // Tick once on entry so a window opening (or a settings change) dispatches immediately
-        // rather than waiting out a whole interval first.
+        // rather than waiting out a whole interval first. Harmless to call redundantly (e.g. every
+        // time this activity is reopened) - tick() itself no-ops if the last real dispatch already
+        // armed a still-future next_dispatch_epoch_ms, so this can't double-queue a task on top of
+        // one the background alarm just delivered. See DEFECTS.md item 5.
         withContext(Dispatchers.IO) { TaskDelivery.tick(context) }
         refreshFromPrefs()
         // 1s poll: cheap while foregrounded (screen is on), doubles as the countdown clock, and
@@ -588,10 +616,14 @@ fun MicroTaskingApp(
                 showingScore = true
             },
             onStart = { taskId ->
+                DiagnosticLog.log(context, "STARTED", "task=$taskId")
                 persistTaskQueue(taskQueue.map { if (it.task.id == taskId) it.start() else it })
             },
             onComplete = { taskId ->
                 val newStreak = streak + 1
+                val started = taskQueue.find { it.task.id == taskId }?.startedAtEpochMs
+                val elapsedSeconds = started?.let { (System.currentTimeMillis() - it) / 1000 }
+                DiagnosticLog.log(context, "COMPLETED", "task=$taskId elapsed=${elapsedSeconds ?: "?"}s")
                 persistLastOutcome(TaskLifecycleState.COMPLETED)
                 persistStreak(newStreak)
                 markDayHadCompletion()
@@ -601,6 +633,7 @@ fun MicroTaskingApp(
                 showingScore = true
             },
             onAbandon = { taskId ->
+                DiagnosticLog.log(context, "ABANDONED", "task=$taskId")
                 persistLastOutcome(TaskLifecycleState.ABANDONED)
                 persistStreak(0)
                 markDayHadFailure()
@@ -624,11 +657,19 @@ fun MicroTaskingApp(
                         activeCategoryOrder = activeCategoryOrder,
                         previousTaskId = taskId
                     )
+                    DiagnosticLog.log(context, "SUBSTITUTED", "task=$taskId replacement=${replacement.id}")
                     persistTaskQueue(taskQueue.map { if (it.task.id == taskId) TaskStackEntry(replacement) else it })
                 }
             },
             onNextPrompt = {
-                persistTaskQueue(makeTaskStack(promptTasks, maxEntries = savedMaxQueueSize))
+                val freshQueue = makeTaskStack(promptTasks, maxEntries = savedMaxQueueSize)
+                freshQueue.forEach {
+                    DiagnosticLog.log(
+                        context, "QUEUED",
+                        "task=${it.task.id} category=${it.task.category} duration=${it.task.durationMinutes}m"
+                    )
+                }
+                persistTaskQueue(freshQueue)
                 showingScore = false
             },
             backgroundPromptsRunning = backgroundPromptsRunning,
@@ -715,8 +756,17 @@ fun TaskPromptScreen(
                         style = MaterialTheme.typography.headlineSmall
                     )
                     Text(
-                        text = "State: ${taskStateLabel(entry.state)} • ${task.durationMinutes} min",
+                        text = if (entry.state == TaskLifecycleState.READY) {
+                            "${task.category} • ${task.durationMinutes} min"
+                        } else {
+                            "${task.category} • ${task.durationMinutes} min • ${taskStateLabel(entry.state)}"
+                        },
                         style = MaterialTheme.typography.bodyMedium
+                    )
+                    Text(
+                        text = "Queued ${formatQueuedAt(entry.queuedAtEpochMs)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
                     when (entry.state) {
@@ -1200,6 +1250,7 @@ fun QrScannerScreen(onResult: (String) -> Unit, onCancel: () -> Unit) {
     }
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         hasCameraPermission = granted
+        DiagnosticLog.log(context, "PERMISSION", "CAMERA ${if (granted) "granted" else "denied"}")
     }
     LaunchedEffect(Unit) {
         if (!hasCameraPermission) permissionLauncher.launch(Manifest.permission.CAMERA)

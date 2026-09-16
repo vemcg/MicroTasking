@@ -4,6 +4,9 @@ package com.microtasking.app
 import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import kotlin.random.Random
 
 data class ManagedTask(
@@ -28,6 +31,9 @@ enum class TaskLifecycleState {
 data class TaskStackEntry(
     val task: ManagedTask,
     val state: TaskLifecycleState = TaskLifecycleState.READY,
+    // Set once, at construction - copy() (start/complete/abandon/timeout below) never touches it,
+    // so it always reflects when this task actually joined the queue, not its last state change.
+    val queuedAtEpochMs: Long = System.currentTimeMillis(),
     val startedAtEpochMs: Long? = null,
     val completedAtEpochMs: Long? = null
 ) {
@@ -163,6 +169,9 @@ fun readTaskQueue(json: String): List<TaskStackEntry> = runCatching {
         TaskStackEntry(
             task = managedTaskFromJson(entry.getJSONObject("task")),
             state = TaskLifecycleState.valueOf(entry.getString("state")),
+            // A queue persisted by a build older than this field won't have it - treat that as
+            // "queued right now" (the best available approximation) rather than epoch 0.
+            queuedAtEpochMs = entry.optNullableLong("queuedAtEpochMs") ?: System.currentTimeMillis(),
             startedAtEpochMs = entry.optNullableLong("startedAtEpochMs"),
             completedAtEpochMs = entry.optNullableLong("completedAtEpochMs")
         )
@@ -177,6 +186,7 @@ fun writeTaskQueue(queue: List<TaskStackEntry>): String = JSONArray().apply {
         put(JSONObject().apply {
             put("task", managedTaskToJson(entry.task))
             put("state", entry.state.name)
+            put("queuedAtEpochMs", entry.queuedAtEpochMs)
             put("startedAtEpochMs", entry.startedAtEpochMs ?: JSONObject.NULL)
             put("completedAtEpochMs", entry.completedAtEpochMs ?: JSONObject.NULL)
         })
@@ -248,6 +258,12 @@ fun readDeclineCounts(json: String): Map<String, Int> = runCatching {
     val values = JSONObject(json)
     values.keys().asSequence().associateWith { values.getInt(it) }
 }.getOrDefault(emptyMap())
+
+private val queuedAtFormatter = DateTimeFormatter.ofPattern("h:mm:ss a")
+
+/** Human-readable local time a task joined the queue, e.g. "3:42:11 PM" - see DEFECTS.md item 3. */
+fun formatQueuedAt(epochMs: Long): String =
+    Instant.ofEpochMilli(epochMs).atZone(ZoneId.systemDefault()).format(queuedAtFormatter)
 
 fun taskStateLabel(state: TaskLifecycleState): String = when (state) {
     TaskLifecycleState.READY -> "Ready"

@@ -19,6 +19,10 @@ deliberate — just do the task immediately.
 - Snooze caps (max length/count) — moot until snooze itself is implemented.
 - Category CRUD (add/remove/rename categories) — category list is hardcoded, not editable.
 - Optional task link (tap a task to open a URL, e.g. a how-to video) — no link field or tap-to-open exists yet.
+- Task queue row shows category name (not the near-useless "State: Ready") plus a queued-at
+  timestamp — not implemented (see "Task queue display" below).
+- On-device diagnostic/operational log, readable over USB when tethered — not implemented (see
+  "Diagnostics" below).
 
 ## Daily prompting
 - Single configurable window per day. Default: 9am–9pm, 6 prompts/day.
@@ -97,6 +101,22 @@ deliberate — just do the task immediately.
 - The full-screen view shows all currently-active stacked tasks (not just one), each with its
   own Start/Defer or Complete/Abandoned actions depending on whether it's been started, plus
   its own elapsed/remaining-time indicator.
+
+### Task queue display (not implemented)
+- Each queue row currently prints `"State: ${label} • ${duration} min"` (`MainActivity.kt`, the
+  `LazyColumn` over `taskEntries`), where `label` is "Ready" for the common case — a state name
+  that's true of almost every row and tells the user nothing. Replace it:
+  - **READY** entries: show `"${task.category} • ${duration} min"` — category name instead of
+    the state word, no literal "Category:" prefix needed.
+  - **Non-READY** entries (Started/Completed/Abandoned/Timed out) keep showing the state, since
+    that's the informative case: `"${task.category} • ${duration} min • ${label}"`.
+- **Queued-at timestamp**: `TaskStackEntry` gains a new field (`queuedAtEpochMs`, set at creation
+  in `makeTaskStack`/`TaskDelivery.tick`, persisted like `startedAtEpochMs`/`completedAtEpochMs`
+  already are) and each row displays it in human-readable local time (e.g. `"Queued 3:42:11 PM"`).
+  Purpose: let the user visually confirm, from the screen alone, whether two entries that appear
+  together were actually dispatched at different ticks (seconds/minutes apart) or genuinely landed
+  in the same tick — direct evidence for the "two tasks show up at once" question tracked in
+  [DEFECTS.md](DEFECTS.md), without needing a USB pull to check.
 
 ## Prompt cadence
 - New prompts are dispatched on a **fixed interval**, recomputed on every scheduling tick
@@ -199,6 +219,22 @@ deliberate — just do the task immediately.
 - **Guardrails**: HTTPS-only, timeout + response-size cap on fetches, CSV parsed as plain data
   only (never rendered/executed as HTML).
 
+## Versioning
+- Version string shape: **`major.minor.feature-build`**, e.g. `0.1.8-2`.
+  - `major.minor.feature` (`versionBase`, e.g. `0.1.8`) is bumped by hand in
+    `app/build.gradle.kts` (`buildVersionBase` property, default value) when a batch of features
+    lands — this is the "feature release" number, not tied to semver compatibility rules.
+  - `build` is `github.run_number` — GitHub's own monotonically-increasing, repo-wide workflow-run
+    counter. It is **automatic, not something to set by hand**: it increments on every run of the
+    "Build & release APK" workflow, on any branch. Because pushes to a non-`main` branch don't
+    auto-trigger the workflow (see [[feedback_manual_workflow_trigger]] /
+    "Always manually trigger the release workflow on non-main pushes" in memory), the next build's
+    number is "whatever `run_number` is next" — check the most recent release/tag rather than
+    assuming a specific value.
+  - So after "Bump version base to 0.1.8", the *first* build at that base is `0.1.8-<N>` where `N`
+    is simply the next run number in sequence — there's no separate per-base counter that resets
+    to 1.
+
 ## Distribution & updates
 - Provide a **QR code** (e.g. in Settings/About) that links to the latest release APK for easy
   sideload install/update on another device — for sharing/installing the app itself, not for
@@ -245,6 +281,42 @@ deliberate — just do the task immediately.
    user can trim/add before finishing.
 6. **Prompt window & frequency** — default 9am–9pm / 6 prompts/day, editable here.
 7. **Summary screen** — recap what's active/skipped and what that means, then finish → home.
+
+## Diagnostics (not implemented)
+- Distinct from the crash-reporting feature already scoped in
+  [PUNCH_LIST.md](PUNCH_LIST.md) item 7 (uncaught-exception handler → one overwritten report file
+  → pre-filled GitHub issue). This is an **operational log** covering normal (non-crash) app
+  activity, so a USB-tethered pull can explain behavior like "why did two tasks show up at once"
+  without that having been a crash.
+- Written to app-private storage so it survives process death, and readable the same way
+  [[reference_android_crash_debugging]] already pulls persisted state: force-stop not required,
+  `adb exec-out run-as com.microtasking.app cat files/diagnostic.log`.
+- **Format**: plain text, one line per event, leading local-time timestamp — readable directly
+  off an `adb pull`/`cat`, no parsing step needed. E.g.:
+  `2026-09-12 14:03:11  QUEUED  task=declutter-surface category=Decluttering duration=5m`
+- **Events logged**:
+  - Task lifecycle: queued, dispatched/prompted, started, completed, abandoned, timed out,
+    deferred, substituted — each with task id, category, and duration.
+  - App/permission lifecycle: process start, first `onResume` after start, and each permission
+    grant/deny/revoke transition (notifications, full-screen intent, exact alarm, battery
+    exemption).
+  - Settings changes: window start/end, prompts-per-day, max-queue-size, and active-category set
+    — logged as before → after on each Save.
+  - (Scheduler ticks — every `TaskDelivery.tick` call, dispatch or not, with the reason — were
+    considered but left out for now; the events above should already show *that* something odd
+    happened. Revisit if the task-lifecycle log alone isn't enough to explain a future report.)
+- **Retention**: rolling 48-hour window — on each write, entries older than 48h are dropped from
+  the front of the file (it's append-ordered, so this is a cheap linear scan from the start, not a
+  sort). A hard size cap (2 MB) is also enforced as a backstop independent of the time window, so a
+  future bug that logs in a tight loop (e.g. a `tick` storm like the historical duplicate-task
+  crash-loop in [DEFECTS.md](DEFECTS.md) item 3) can't grow the file unbounded before the 48h trim
+  catches up.
+  - **Sizing**: at normal usage (6 prompts/day, occasional app opens/settings edits) this is on
+    the order of 10-20 KB/day — even a heavy day (frequent app opens, several settings edits, all
+    3 stack slots cycling) stays well under 200 KB/day, so 48h of history is comfortably under
+    1 MB in practice. That's negligible next to the hundreds of MB to low GB of free space typical
+    app-private storage has — the 2 MB cap above is a safety backstop against a logging bug, not
+    an expected ceiling.
 
 ## Open questions (for later)
 - External task source: exact periodic sync interval (e.g. daily?) and Google Cloud API key
