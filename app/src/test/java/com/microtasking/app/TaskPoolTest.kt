@@ -86,4 +86,71 @@ class TaskPoolTest {
         assertEquals(counts, readDeclineCounts(writeDeclineCounts(counts)))
         assertTrue(readDeclineCounts("not-json").isEmpty())
     }
+
+    @Test
+    fun managedTasks_referredAtRoundTripsThroughJson() {
+        val tasks = listOf(builtInTasks.first().copy(referredAt = 1_700_000_000_000L))
+
+        assertEquals(tasks, readManagedTasks(writeManagedTasks(tasks)))
+    }
+
+    @Test
+    fun managedTasks_missingReferredAtFieldReadsAsNull() {
+        // Simulates a pool persisted by a build older than the referredAt field.
+        val json = writeManagedTasks(listOf(builtInTasks.first()))
+        val withoutField = org.json.JSONArray(json).getJSONObject(0).apply { remove("referredAt") }
+
+        val read = readManagedTasks(org.json.JSONArray().put(withoutField).toString())
+
+        assertEquals(null, read.single().referredAt)
+    }
+
+    @Test
+    fun mergeImportedManagedTasks_carriesForwardReferredAtLikeNeverSuggest() {
+        val task = builtInTasks.first()
+        val existing = listOf(task.copy(neverSuggest = true, referredAt = 1_700_000_000_000L))
+        // A fresh CSV-based import never knows about referredAt (see refreshReferralState) - it
+        // always comes back null from the sheet-import path itself.
+        val imported = listOf(task)
+
+        val merged = mergeImportedManagedTasks(imported, existing)
+
+        assertEquals(1_700_000_000_000L, merged.single().referredAt)
+        assertTrue(merged.single().neverSuggest)
+    }
+
+    @Test
+    fun refreshReferralState_stampsNewlyReferredTaskAndClearsUnreferredOne() {
+        val referred = builtInTasks[0]
+        val stillReferred = builtInTasks[1].copy(referredAt = 1_700_000_000_000L)
+        val noLongerReferred = builtInTasks[2].copy(referredAt = 1_700_000_000_000L)
+        val neverReferred = builtInTasks[3]
+        val tasks = listOf(referred, stillReferred, noLongerReferred, neverReferred)
+        val referredKeys = setOf(
+            WebAppClient.rowKey(referred.category, referred.description),
+            WebAppClient.rowKey(stillReferred.category, stillReferred.description)
+        )
+
+        val result = refreshReferralState(tasks, referredKeys, now = 42L)
+        val byId = result.associateBy { it.id }
+
+        assertEquals(42L, byId.getValue(referred.id).referredAt)
+        assertEquals(1_700_000_000_000L, byId.getValue(stillReferred.id).referredAt) // unchanged, not re-stamped
+        assertEquals(null, byId.getValue(noLongerReferred.id).referredAt)
+        assertEquals(null, byId.getValue(neverReferred.id).referredAt)
+    }
+
+    @Test
+    fun eligiblePromptTasks_excludesReferredTasks() {
+        val referred = builtInTasks.first().copy(referredAt = 1_700_000_000_000L)
+        val notReferred = builtInTasks[1]
+
+        val eligible = eligiblePromptTasks(
+            managedTasks = listOf(referred, notReferred),
+            legacyUserTasks = emptyList(),
+            selectedCategories = setOf(referred.category, notReferred.category)
+        )
+
+        assertEquals(listOf(notReferred), eligible)
+    }
 }

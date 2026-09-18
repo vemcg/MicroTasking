@@ -39,7 +39,7 @@ fun eligiblePromptTasks(
     val managedEligibleTasks = managedTasks
         .filter { task ->
             task.enabled && !task.temporarilyUnavailable && !task.neverSuggest &&
-                task.category in selectedCategories
+                task.referredAt == null && task.category in selectedCategories
         }
     val legacyEligibleTasks = legacyUserTasks
         .filter { it.enabled && it.category in selectedCategories }

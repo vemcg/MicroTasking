@@ -50,6 +50,11 @@ README_CONTENT = [
     ["   - Set Share permissions to 'Anyone with the link can view'."],
     ["   - Paste your Sheet URL into the onboarding page to generate your custom QR code."],
     ["   - In the MicroTasking app, tap Settings -> Import External Task Pool -> Scan QR Code."],
+    [""],
+    ["4. REFERRING A TASK TO 2DO2GO (OPTIONAL):"],
+    ["   - Only needed if you also use the 2do2go companion app. In this Sheet's Extensions -> Apps Script editor: Deploy -> New deployment -> Web app -> Execute as Me, Who has access Anyone with the link -> Deploy."],
+    ["   - Paste the resulting URL into both apps' Settings ('Apps Script Web App URL')."],
+    ["   - This adds two hidden columns (Importance, Urgency) to each task tab - don't unhide or edit them by hand, both apps manage them."],
 ]
 
 HEADER_FONT = Font(bold=True)

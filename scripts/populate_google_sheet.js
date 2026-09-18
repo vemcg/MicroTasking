@@ -19,6 +19,12 @@
  *        (re)installs the edit triggers. Run this once in every copy, and after adding tabs.
  *      - "Rebuild everything from template": the full setupMicroTaskingSheet (wipes the built-in
  *        category tabs back to the canonical task list).
+ * 8. OPTIONAL, only needed for "Refer to 2do2go" (MicroTasking) / referred-item actions
+ *    (2do2go): in this same editor, Deploy -> New deployment -> pick type "Web app" -> Execute
+ *    as "Me", Who has access "Anyone with the link" -> Deploy. Paste the URL it gives you into
+ *    both apps' Settings ("Apps Script Web App URL"). One deployment per Sheet copy; re-running
+ *    "Repair headers & triggers"/"Rebuild everything from template" later doesn't require
+ *    re-deploying. See SPEC.md "Sheet write-back (Apps Script Web App)".
  *
  * The live behavior (auto-header a new tab, checkbox-on-type, master A1 toggle) runs on TWO
  * *installable* triggers (onGridChange_, onSheetEdit_) that setupMicroTaskingSheet / repairSheet_
@@ -81,7 +87,12 @@ function setupMicroTaskingSheet() {
     ["3. SYNCING WITH THE APP:"],
     ["   - Set Share permissions to 'Anyone with the link can view'."],
     ["   - Paste your Sheet URL into the onboarding page to generate your custom QR code."],
-    ["   - In the MicroTasking app, tap Settings -> Import External Task Pool -> Scan QR Code."]
+    ["   - In the MicroTasking app, tap Settings -> Import External Task Pool -> Scan QR Code."],
+    [""],
+    ["4. REFERRING A TASK TO 2DO2GO (OPTIONAL):"],
+    ["   - Only needed if you also use the 2do2go companion app. In this Sheet's Extensions -> Apps Script editor: Deploy -> New deployment -> Web app -> Execute as Me, Who has access Anyone with the link -> Deploy."],
+    ["   - Paste the resulting URL into both apps' Settings ('Apps Script Web App URL')."],
+    ["   - This adds two hidden columns (Importance, Urgency) to each task tab - don't unhide or edit them by hand, both apps manage them."]
   ];
 
   readmeSheet.getRange(1, 1, readmeData.length, 1).setValues(readmeData);
@@ -327,6 +338,36 @@ function applyCategoryTabHeader_(sheet) {
   sheet.setColumnWidth(1, 40);
   sheet.setColumnWidth(2, 500);
   sheet.setColumnWidth(3, 250);
+  ensureReferralColumns_(sheet);
+}
+
+/**
+ * Adds/repairs the D (Importance) / E (Urgency) columns MicroTasking's "Refer to 2do2go" feature
+ * and 2do2go's own triage both write through the doPost endpoints below (see SPEC.md "Task
+ * referral to 2do2go" / "Sheet write-back"). Both columns are hidden and covered by a
+ * warning-only protected range - not a hard lock (a warning-only protection doesn't block
+ * script-driven edits at all, only shows a click-through warning in the Sheets UI), just enough
+ * to keep an accidental manual edit from silently corrupting referral state. Idempotent - safe to
+ * re-run on a tab that already has it (unlike applyCategoryTabHeader_'s caller in repairSheet_,
+ * this one is NOT gated behind "does this tab already have a header", so re-running setup/repair
+ * upgrades a tab created before this feature existed).
+ */
+function ensureReferralColumns_(sheet) {
+  sheet.getRange("D1").setValue("Importance");
+  sheet.getRange("E1").setValue("Urgency");
+  sheet.getRange("D1:E1").setFontWeight("bold").setHorizontalAlignment("center");
+  if (!sheet.isColumnHiddenByUser(4)) sheet.hideColumns(4);
+  if (!sheet.isColumnHiddenByUser(5)) sheet.hideColumns(5);
+
+  var range = sheet.getRange("D2:E");
+  var alreadyProtected = sheet.getProtections(SpreadsheetApp.ProtectionType.RANGE).some(function (p) {
+    return p.getRange().getA1Notation() === range.getA1Notation();
+  });
+  if (!alreadyProtected) {
+    range.protect()
+      .setDescription("MicroTasking/2do2go referral state - edit via the apps, not by hand")
+      .setWarningOnly(true);
+  }
 }
 
 /**
@@ -352,7 +393,12 @@ function repairSheet_() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   ss.getSheets().forEach(function (sheet) {
     if (sheet.getName() === "README") return;
-    if (String(sheet.getRange("B1").getValue()).trim() === "Description") return;
+    if (String(sheet.getRange("B1").getValue()).trim() === "Description") {
+      // Header already present - still make sure a tab created before the referral feature
+      // existed gets upgraded with the Importance/Urgency columns.
+      ensureReferralColumns_(sheet);
+      return;
+    }
     applyCategoryTabHeader_(sheet);
   });
   var installed = ensureTriggers_();
@@ -456,4 +502,105 @@ function addRowCheckbox_(sheet, row) {
     toggleCell.insertCheckboxes();
     toggleCell.setValue(true);
   }
+}
+
+/**
+ * === Web App endpoints (MicroTasking <-> 2do2go referral bridge) ===
+ *
+ * Deploy from THIS sheet's bound Apps Script editor: Deploy -> New deployment -> Web app,
+ * "Execute as: Me", "Who has access: Anyone with the link" (the resulting URL, not any
+ * additional auth, is what keeps this private - same trust model as the sheet's own "Anyone
+ * with the link" CSV export). Paste the resulting URL into the same onboarding flow that already
+ * takes the Sheet share link.
+ *
+ * Row identity is (category = tab name, description = column B text), never a row/gid index -
+ * see the comment on ensureReferralColumns_ and DEFECTS-style reasoning in SPEC.md "Task
+ * referral to 2do2go": rows shift under onSheetEdit_'s delete-row-on-empty-description behavior,
+ * so a cached row index would eventually point at the wrong row.
+ *
+ * See MicroTasking's SPEC.md "Sheet write-back (Apps Script Web App)" and 2do2go's SPEC.md
+ * "Referred item status & completion" for the two apps' side of this contract.
+ */
+
+/** GET ?action=getPriorities -> {"ok":true,"rows":[{"category","description","importance","urgency"}, ...]} */
+function doGet(e) {
+  var action = e && e.parameter && e.parameter.action;
+  if (action !== "getPriorities") {
+    return jsonResponse_({ ok: false, error: "Unknown or missing action" });
+  }
+  try {
+    var rows = [];
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    ss.getSheets().forEach(function (sheet) {
+      if (sheet.getName() === "README") return;
+      var lastRow = sheet.getLastRow();
+      if (lastRow < 2) return;
+      var values = sheet.getRange(2, 2, lastRow - 1, 4).getValues(); // B..E
+      for (var i = 0; i < values.length; i++) {
+        var description = String(values[i][0]).trim();
+        var importance = values[i][2];
+        var urgency = values[i][3];
+        if (!description) continue;
+        if (importance === "" && urgency === "") continue;
+        rows.push({
+          category: sheet.getName(),
+          description: description,
+          importance: importance === "" ? 0 : Number(importance),
+          urgency: urgency === "" ? 0 : Number(urgency)
+        });
+      }
+    });
+    return jsonResponse_({ ok: true, rows: rows });
+  } catch (err) {
+    return jsonResponse_({ ok: false, error: String(err) });
+  }
+}
+
+/**
+ * POST body (JSON): {"action": "setPriority"|"clearPriority"|"deleteRow", "category", "description", ...}
+ *  - setPriority: also "importance" (number 0-1), "urgency" (number 0-1). Written by MicroTasking
+ *    on referral, and by 2do2go on re-triage.
+ *  - clearPriority: blanks D/E for that row. 2do2go's "Complete (for now)".
+ *  - deleteRow: removes the row entirely. 2do2go's "Fully complete".
+ */
+function doPost(e) {
+  try {
+    var body = JSON.parse(e.postData.contents);
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(body.category);
+    if (!sheet) return jsonResponse_({ ok: false, error: "No tab named \"" + body.category + "\"" });
+    var row = findRowByDescription_(sheet, body.description);
+    if (row === -1) return jsonResponse_({ ok: false, error: "No row matching that description" });
+
+    switch (body.action) {
+      case "setPriority":
+        sheet.getRange(row, 4, 1, 2).setValues([[Number(body.importance), Number(body.urgency)]]);
+        break;
+      case "clearPriority":
+        sheet.getRange(row, 4, 1, 2).setValues([["", ""]]);
+        break;
+      case "deleteRow":
+        sheet.deleteRow(row);
+        break;
+      default:
+        return jsonResponse_({ ok: false, error: "Unknown action \"" + body.action + "\"" });
+    }
+    return jsonResponse_({ ok: true });
+  } catch (err) {
+    return jsonResponse_({ ok: false, error: String(err) });
+  }
+}
+
+/** Row index (1-based) of the first row in `sheet` whose column B matches `description`, or -1. */
+function findRowByDescription_(sheet, description) {
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return -1;
+  var values = sheet.getRange(2, 2, lastRow - 1, 1).getValues();
+  for (var i = 0; i < values.length; i++) {
+    if (String(values[i][0]).trim() === description) return i + 2;
+  }
+  return -1;
+}
+
+function jsonResponse_(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
 }

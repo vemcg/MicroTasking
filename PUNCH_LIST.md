@@ -71,14 +71,17 @@ Next work session: make onboarding, import, the spreadsheet template, persistenc
    - **Deferred:** report contents (trace-only vs. trace + device + persisted-state snapshot). The state snapshot is what made DEFECTS item 3 a fast diagnosis, but it embeds task descriptions. Decide when building.
    - Until this ships, crash diagnosis = keep the test device attached and pull `adb logcat -b crash` / `adb exec-out run-as com.microtasking.app cat shared_prefs/…`.
 
-8. **"Refer to 2do2go" hand-off** — *design finalized (2026-09-18), not yet built.* See
-   `SPEC.md` "Task referral to 2do2go" and "Sheet write-back (Apps Script Web App)" for the full
-   design: a queue action, available on any queued task regardless of state, opens an
-   Eisenhower-matrix touch screen, writes continuous raw importance/urgency values back to
-   hidden Sheet columns (read/written via a per-user Apps Script Web App deployment, never via
-   CSV export) via a new dedicated `ManagedTask.referredAt` field, and the task becomes
-   ineligible for this app's own queue based on that state. This app writes raw, unweighted
-   importance/urgency floats only — combining them into a priority score is a 2do2go-side
-   concern (user-adjustable weighting in its own settings), not this app's. See 2do2go's
-   `SPEC.md`/`PUNCH_LIST.md` item 1 for its side (ingestion gating, progress tracking,
-   completion actions, priority weighting).
+8. **"Refer to 2do2go" hand-off** — *core built (2026-09-18), one gap remains.* See `SPEC.md`
+   "Task referral to 2do2go" and "Sheet write-back (Apps Script Web App)" for the full design.
+   Built: `ManagedTask.referredAt` field + JSON round-trip (`TaskPool.kt`), exclusion from
+   `eligiblePromptTasks`, `refreshReferralState`/`mergeImportedManagedTasks` sync-time
+   reconciliation, the Apps Script `doGet`/`doPost` endpoints and hidden+warning-protected
+   `Importance`/`Urgency` columns (`populate_google_sheet.js`), the `WebAppClient` network layer
+   (`ReferralBridge.kt`), and the in-app UI — a "Refer to 2do2go" button available on any queued
+   task regardless of state, opening a full-screen Eisenhower touch-capture screen
+   (`EisenhowerReferralScreen`) that writes raw unweighted importance/urgency values. **Gap**: the
+   Web App URL has no QR path yet (onboarding page hasn't been touched) — currently a manual
+   paste field in Settings ("Apps Script Web App URL") is the only way to register it; folding it
+   into the existing onboarding QR is still open. Not yet verified on-device. See 2do2go's
+   `SPEC.md`/`PUNCH_LIST.md` item 1 for its side (ingestion gating, progress tracking, completion
+   actions, priority weighting).

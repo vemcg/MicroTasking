@@ -17,7 +17,14 @@ data class ManagedTask(
     val builtIn: Boolean,
     val enabled: Boolean = true,
     val temporarilyUnavailable: Boolean = false,
-    val neverSuggest: Boolean = false
+    val neverSuggest: Boolean = false,
+    // Epoch ms this task was referred to 2do2go, null = not referred. Set locally the instant a
+    // referral write succeeds (see MainActivity's referral flow), then overwritten from the
+    // sheet's Importance/Urgency state at every sync (see refreshReferralState in this file) -
+    // a dedicated field, deliberately not a reuse of neverSuggest, which mergeImportedManagedTasks
+    // below must instead *preserve* untouched across every re-sync. See SPEC.md
+    // "Task referral to 2do2go".
+    val referredAt: Long? = null
 )
 
 enum class TaskLifecycleState {
@@ -104,6 +111,7 @@ private fun managedTaskToJson(task: ManagedTask): JSONObject = JSONObject().appl
     put("enabled", task.enabled)
     put("temporarilyUnavailable", task.temporarilyUnavailable)
     put("neverSuggest", task.neverSuggest)
+    put("referredAt", task.referredAt ?: JSONObject.NULL)
 }
 
 private fun managedTaskFromJson(task: JSONObject): ManagedTask = ManagedTask(
@@ -114,7 +122,10 @@ private fun managedTaskFromJson(task: JSONObject): ManagedTask = ManagedTask(
     builtIn = task.getBoolean("builtIn"),
     enabled = task.getBoolean("enabled"),
     temporarilyUnavailable = task.getBoolean("temporarilyUnavailable"),
-    neverSuggest = task.getBoolean("neverSuggest")
+    neverSuggest = task.getBoolean("neverSuggest"),
+    // Absent on a queue/pool entry persisted by a build older than this field - treat that as
+    // "not referred" (null), not a crash, same pattern optNullableLong already uses below.
+    referredAt = if (task.has("referredAt") && !task.isNull("referredAt")) task.getLong("referredAt") else null
 )
 
 fun readManagedTasks(json: String): List<ManagedTask> = runCatching {
@@ -140,6 +151,11 @@ fun writeManagedTasks(tasks: List<ManagedTask>): String = JSONArray().apply {
  * import. It defaults to the categories present in [imported], but the caller passes the actual
  * tab names so a tab with zero task rows still counts as a live category, and a category with no
  * tab is dropped even when the import brought no tasks.
+ *
+ * [ManagedTask.referredAt] is carried over here too, same as the other two flags - this CSV-based
+ * import never knows about it either way (Importance/Urgency aren't CSV columns, see SPEC.md
+ * "Sheet write-back"). It's [refreshReferralState] below, called separately against the Apps
+ * Script Web App, that's actually authoritative for it.
  */
 fun mergeImportedManagedTasks(
     imported: List<ManagedTask>,
@@ -151,11 +167,43 @@ fun mergeImportedManagedTasks(
         val prior = priorById[task.id] ?: return@map task
         task.copy(
             neverSuggest = prior.neverSuggest,
-            temporarilyUnavailable = prior.temporarilyUnavailable
+            temporarilyUnavailable = prior.temporarilyUnavailable,
+            referredAt = prior.referredAt
         )
     }
     return reconciled + existing.filter { task ->
         task.id.startsWith("custom-") && task.category in authoritativeCategories
+    }
+}
+
+/**
+ * Reconciles local [ManagedTask.referredAt] against the sheet's actual Importance/Urgency state,
+ * fetched from the Apps Script Web App's get-priorities endpoint (never CSV - see SPEC.md "Sheet
+ * write-back": hiding a column doesn't exclude it from CSV/gviz export, so those two columns are
+ * read via the Web App exclusively). Call this at the same sync boundaries as the CSV import
+ * (manual refresh + periodic background sync) - not from [chooseWeightedTask]/`tick`, which must
+ * stay a fast local-only read with no network dependency of its own.
+ *
+ * [referredRowKeys] is the set of `"<category>|<description>"` keys the Web App reports as having
+ * a non-empty Importance or Urgency (see [WebAppClient.RowKey] convention - row identity is
+ * `(tab, description)`, not row index, since rows shift under the bound script's
+ * delete-row-on-empty-description behavior). A task whose key isn't in the set gets
+ * `referredAt = null` (covers "Complete (for now)" clearing it sheet-side); a task whose key *is*
+ * in the set keeps its existing `referredAt` if already set (referral happened locally and this
+ * call is just confirming it), or gets stamped with the current time if this is the first time
+ * this client has observed it referred (e.g. a second device where the referral itself happened
+ * elsewhere).
+ */
+fun refreshReferralState(
+    tasks: List<ManagedTask>,
+    referredRowKeys: Set<String>,
+    now: Long = System.currentTimeMillis()
+): List<ManagedTask> = tasks.map { task ->
+    val key = "${task.category}|${task.description}"
+    when {
+        key !in referredRowKeys -> if (task.referredAt != null) task.copy(referredAt = null) else task
+        task.referredAt != null -> task
+        else -> task.copy(referredAt = now)
     }
 }
 
