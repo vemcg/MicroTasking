@@ -599,10 +599,20 @@ fun MicroTaskingApp(
 
     if (showingQrScanner) {
         QrScannerScreen(
-            onResult = { scannedUrl ->
+            onResult = { scannedText ->
                 showingQrScanner = false
+                // The onboarding page's QR carries the sheet URL alone, or - when a Web App URL
+                // was also filled in there - both, newline-separated (sheet URL first). A plain
+                // single-line scan (older codes, or no Web App URL entered) works exactly as
+                // before. See scripts/generate_install_page.py's buildQrPayload.
+                val lines = scannedText.lines().map { it.trim() }.filter { it.isNotEmpty() }
+                val scannedUrl = lines.firstOrNull() ?: scannedText
                 savedSheetUrl = scannedUrl
                 onSheetUrlSaved(scannedUrl)
+                lines.getOrNull(1)?.let { webAppUrl ->
+                    savedWebAppUrl = webAppUrl
+                    onWebAppUrlSaved(webAppUrl)
+                }
                 runSheetImport(scannedUrl)
             },
             onCancel = { showingQrScanner = false }
