@@ -61,8 +61,8 @@ deliberate — just do the task immediately.
   the odds toward shorter or longer tasks.
 
 ## On-prompt interaction (Start / Complete / Abandoned / Defer)
-- Each task on the stack starts in a **not-started** state, offering two actions:
-  **Start** and **Defer**.
+- Each task on the stack starts in a **not-started** state, offering two actions: **Start** and
+  **Defer**.
   - **Start** begins the personal work-timer for that task and is required before Complete or
     Abandoned become available — you can't mark something complete without having started it.
   - **Defer**: pick 1 week / 1 month / 3 months / 6 months. The task immediately leaves the
@@ -75,6 +75,13 @@ deliberate — just do the task immediately.
     "Per-task duration adaptation" for how this reshapes the task's tier.
   - **Abandoned**: manual give-up, counts as a failure against scoring. Task returns to the
     pool (still repeatable, not deferred, not disabled) for future selection.
+- **Refer to 2do2go** is available on **any** queued task regardless of the states above —
+  not-started, or already Started/mid-timer — the only requirement is that the task is currently
+  on the queue. See "Task referral to 2do2go" below for the full flow — in short, it opens an
+  Eisenhower-matrix touch screen, writes the touch position back to the shared Sheet, and removes
+  the task from the stack immediately with a replacement backfilled at the bottom (a neutral
+  outcome, like Defer — referring an already-Started task counts as neither Complete nor
+  Abandoned, and discards its in-progress timer).
 - **The only two ways a task fails**: (1) it gets **pushed off the top of the stack** when a
   new prompt fires while at the "max concurrent tasks" limit (see Task stack below), or
   (2) it is manually marked **Abandoned**. There is no separate deadline/timeout auto-fail —
@@ -203,6 +210,12 @@ deliberate — just do the task immediately.
   imported task starts at 5 min. Rows with an empty description are skipped, not fatal. `link`,
   if a real hyperlink is used in the cell, is read as its target URL. The CSV parser honors
   `"`-quoted fields (so a description may contain commas) but not fields spanning newlines.
+- **`Importance`/`Urgency` columns** (added by "Task referral to 2do2go" below, matched by
+  header text like the columns above): hidden, warning-protected, not part of the user-facing
+  schema, and **not read via this CSV/gviz path at all** — unlike every other column, they're
+  read only through the Apps Script Web App (see "Sheet write-back" below), specifically because
+  the CSV/gviz export doesn't respect a column's hidden state. A non-empty value on either makes
+  the row ineligible for selection.
 - **Import is all-or-nothing per row, not per checkbox**: every row with a description is
   imported. An unchecked column A means the task exists in the pool but is `enabled = false`, so
   it is stored and visible on the Task Pool screen but never queued. If a tab has no checkboxes
@@ -218,6 +231,87 @@ deliberate — just do the task immediately.
   (interval TBD, e.g. daily) once a source is registered.
 - **Guardrails**: HTTPS-only, timeout + response-size cap on fetches, CSV parsed as plain data
   only (never rendered/executed as HTML).
+
+## Task referral to 2do2go (design finalized, not yet built)
+
+Companion to **External task source** above: once import is in place, a queued task can be
+**referred** to the sibling app **2do2go** (`../2do2go`) instead of being done here. See
+2do2go's own `SPEC.md` ("Priority: Eisenhower matrix", "Referred item status & completion") and
+`PUNCH_LIST.md` item 1 for its side of this feature.
+
+- **Trigger**: a **"Refer to 2do2go"** action available on any queued task, in any state — not
+  gated to pre-Start like Defer (see "On-prompt interaction" above). Referring an already-Started
+  task discards its in-progress timer and counts as neither Complete nor Abandoned.
+- **Eisenhower touch capture**: tapping it opens a full-screen 2x2 matrix (same quadrant layout
+  2do2go's own triage widget uses — Important/Not important rows, Urgent/Not urgent columns).
+  The **precise touch position** is recorded, not just which quadrant it landed in: horizontal
+  position maps to **urgency** (left edge = 1.0, right edge = 0.0), vertical position maps to
+  **importance** (top edge = 1.0, bottom edge = 0.0) — two continuous floats in `[0, 1]`, not
+  booleans. (Axis direction and the exact mapping are a first proposal — tunable, see Open
+  questions.)
+- **Write-back**: those two values are written to the task's row in the shared Sheet via the
+  Apps Script Web App (see "Sheet write-back" below) as soon as the touch is confirmed. On
+  success, the task is immediately removed from this app's stack — same as Defer, a replacement
+  is selected and appended to the bottom to keep the stack full. On failure (network/Web App
+  error), the referral is not applied and the task stays on the stack (exact failure-state UX
+  TBD at build time).
+- **Exclusion from future selection**: a new field, `ManagedTask.referredAt: Long?` (epoch ms,
+  null = not referred), is the authoritative local signal — set immediately on a successful
+  referral write (no waiting on the next sync), and refreshed from the sheet's `Importance`/
+  `Urgency` state at every sync boundary (see "Sheet write-back" below for how those are read).
+  `TaskDelivery`'s selection logic excludes any task with `referredAt != null`. This is a
+  **dedicated field, not a reuse of `ManagedTask.neverSuggest`**: `mergeImportedManagedTasks`
+  explicitly preserves `neverSuggest`/`temporarilyUnavailable` across every re-sync as
+  user-set flags that must survive re-import (see its doc comment in `TaskPool.kt`) — reusing
+  that field for referral would mean either fighting that preserve-on-resync contract when a
+  referral is reversed (2do2go's "Complete (for now)"), or special-casing which resets are
+  "real" `neverSuggest` vs. referral-driven. A dedicated field avoids that entirely: it's simply
+  overwritten from sheet state on every sync, same as `enabled` already is.
+- **Sheet schema addition** (`populate_google_sheet.js` / `applyCategoryTabHeader_`): two new
+  columns per category tab — `Importance`, `Urgency` — matched by header text like
+  `Description`/`Link`, not position, placed after the existing columns. Both are **hidden**
+  (`Sheet.hideColumn`) and covered by a **warning-only protected range** — not a hard lock,
+  since the Web App runs as the sheet owner and needs to write them; the intent is to keep an
+  accidental manual edit from silently corrupting referral state, not to make the range
+  literally uneditable. A blank `Importance`/`Urgency` cell means "not referred." (2do2go's
+  own progress value is local-only, not a sheet column — see its `SPEC.md`.)
+- **Row identity for the write**: the Apps Script endpoint resolves which row to write by
+  `(tab name, description text)`, scanning column B server-side — not by row/gid index. Matches
+  the existing `external-<category>-<description>` id convention, and index-based addressing
+  would be actively unsafe: `onSheetEdit_` already deletes rows and shifts everything up when a
+  description is cleared, so a cached row index could silently point at the wrong row moments
+  later.
+
+## Sheet write-back (Apps Script Web App)
+
+Shared infrastructure for the referral feature above and for 2do2go's referred-item actions
+(progress updates, "Complete (for now)", "Fully complete") — described here since this repo
+owns the Apps Script template tooling (`scripts/populate_google_sheet.js`, pushed via
+`npm run push:sheet`/clasp, see `.clasp.json`).
+
+- **Still a bound script.** The Web App is deployed from the same Sheet-bound Apps Script
+  project every user already pastes `populate_google_sheet.js` into (Extensions → Apps Script
+  *inside their own copy* — see the instructions comment at the top of that file). Nothing moves
+  to a standalone project. The only new one-time step, done once per user's sheet copy in that
+  same editor: **Deploy → New deployment → Web app**, which hands back a callable URL.
+- **Endpoints** (exact request/response shape TBD at build time): set-priority (importance +
+  urgency for a row), clear-priority (2do2go's "Complete (for now)"), update-progress (2do2go's
+  0-100% value), delete-row (2do2go's "Fully complete"). Deployed "Execute as: Me" so it acts
+  with the sheet owner's permissions regardless of which app/device calls it.
+- **Getting the URL into both apps**: the onboarding page (GitHub Pages, the same page that
+  already turns a pasted Sheet share link into the `microtasking://import-tasks?url=…` QR) gets
+  a second field for the Web App URL, encoded into the **same QR**. Either app registers both
+  values from one scan — no separate in-app paste step.
+- **`Importance`/`Urgency` are read via the Web App only, never via CSV/gviz.** Hiding a column
+  doesn't exclude it from the CSV/gviz export both apps otherwise use for reads — those exports
+  are reachable by anyone with the Sheet's view link, which would defeat the "invisible" intent
+  behind hiding those two columns in the first place. So: a GET endpoint returns current
+  `Importance`/`Urgency` per row, called only at this app's existing sync boundaries (manual
+  refresh + periodic background sync, same cadence as the CSV import already happens at), and
+  the result is persisted locally (see `ManagedTask.referredAt` above). `TaskDelivery.tick`
+  itself never calls the Web App — it only ever reads the local persisted state, so normal
+  queue-selection gains no new live-network dependency. Columns A-C (checkbox/description/link)
+  keep reading via the existing CSV/gviz path exactly as today.
 
 ## Versioning
 - Version string shape: **`major.minor.feature-build`**, e.g. `0.1.8-2`.
@@ -322,6 +416,13 @@ deliberate — just do the task immediately.
 - External task source: exact periodic sync interval (e.g. daily?) and Google Cloud API key
   setup steps (project creation, Sheets API enablement, Android app restriction) — see
   "External task source" section above for the rest (now finalized).
+- Task referral to 2do2go: exact touch-axis mapping and the resulting priority formula weighting
+  are a first proposal, not user-validated — revisit once there's a feel for how it ranks in
+  practice (2do2go's existing `important*2 + urgency` note says the same about its old boolean
+  formula). Exact Web App request/response schema. Whether the warning-only protected range
+  actually blocks a script running "Execute as: Me" the way intended, or needs a different
+  protection setup — verify during implementation. Failure-state UX when the referral write-back
+  call fails (offline, Web App misconfigured/undeployed, etc.).
 - QR install/update: where the APK is hosted (e.g. GitHub Releases) and how the QR content
   gets generated/kept in sync with the latest build.
 - Max concurrent tasks default value and whether it's adjustable per-category or global only.

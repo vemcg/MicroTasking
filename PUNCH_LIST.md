@@ -71,4 +71,14 @@ Next work session: make onboarding, import, the spreadsheet template, persistenc
    - **Deferred:** report contents (trace-only vs. trace + device + persisted-state snapshot). The state snapshot is what made DEFECTS item 3 a fast diagnosis, but it embeds task descriptions. Decide when building.
    - Until this ships, crash diagnosis = keep the test device attached and pull `adb logcat -b crash` / `adb exec-out run-as com.microtasking.app cat shared_prefs/…`.
 
-8. **"Move to To-Do" hand-off to 2do2go** — *scoped, not started (2026-09-15).* [2do2go](https://github.com/vemcg/2do2go) is a new companion app (traditional to-do list, sharing this project's Google Sheet, Eisenhower-matrix priority) scaffolded as a sibling repo. Vision: a queued task gains a "Move to To-Do" action here that hands it to 2do2go (assigning its priority quadrant in the process) and then permanently excludes it from this app's own queue — cheap on this side, just set `ManagedTask.neverSuggest = true` (already exists, already does exactly this). The hard part is the bridge itself, since the two apps are separate sandboxed installs — see 2do2go's `PUNCH_LIST.md` item 1 for the candidate approaches (Sheet write-back vs. on-device IPC) and why neither is a quick add. Needs its own design pass before building.
+8. **"Refer to 2do2go" hand-off** — *design finalized (2026-09-18), not yet built.* See
+   `SPEC.md` "Task referral to 2do2go" and "Sheet write-back (Apps Script Web App)" for the full
+   design: a queue action, available on any queued task regardless of state, opens an
+   Eisenhower-matrix touch screen, writes continuous raw importance/urgency values back to
+   hidden Sheet columns (read/written via a per-user Apps Script Web App deployment, never via
+   CSV export) via a new dedicated `ManagedTask.referredAt` field, and the task becomes
+   ineligible for this app's own queue based on that state. This app writes raw, unweighted
+   importance/urgency floats only — combining them into a priority score is a 2do2go-side
+   concern (user-adjustable weighting in its own settings), not this app's. See 2do2go's
+   `SPEC.md`/`PUNCH_LIST.md` item 1 for its side (ingestion gating, progress tracking,
+   completion actions, priority weighting).
