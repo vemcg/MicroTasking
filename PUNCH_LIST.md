@@ -71,17 +71,85 @@ Next work session: make onboarding, import, the spreadsheet template, persistenc
    - **Deferred:** report contents (trace-only vs. trace + device + persisted-state snapshot). The state snapshot is what made DEFECTS item 3 a fast diagnosis, but it embeds task descriptions. Decide when building.
    - Until this ships, crash diagnosis = keep the test device attached and pull `adb logcat -b crash` / `adb exec-out run-as com.microtasking.app cat shared_prefs/…`.
 
-8. **"Refer to 2do2go" hand-off** — *core built (2026-09-18), one gap remains.* See `SPEC.md`
-   "Task referral to 2do2go" and "Sheet write-back (Apps Script Web App)" for the full design.
+8. **"Refer to ActiveTasks" hand-off** — *core built (2026-09-18), one gap remains.* See `SPEC.md`
+   "Task referral to ActiveTasks" and "Sheet connection & API" for the full design. (The "Sheet
+   write-back" section was replaced by "Sheet connection & API" on 2026-09-19 — item 9 below is
+   the build plan for it.)
    Built: `ManagedTask.referredAt` field + JSON round-trip (`TaskPool.kt`), exclusion from
    `eligiblePromptTasks`, `refreshReferralState`/`mergeImportedManagedTasks` sync-time
    reconciliation, the Apps Script `doGet`/`doPost` endpoints and hidden+warning-protected
    `Importance`/`Urgency` columns (`populate_google_sheet.js`), the `WebAppClient` network layer
-   (`ReferralBridge.kt`), and the in-app UI — a "Refer to 2do2go" button available on any queued
+   (`ReferralBridge.kt`), and the in-app UI — a "Refer to ActiveTasks" button available on any queued
    task regardless of state, opening a full-screen Eisenhower touch-capture screen
-   (`EisenhowerReferralScreen`) that writes raw unweighted importance/urgency values. **Gap**: the
-   Web App URL has no QR path yet (onboarding page hasn't been touched) — currently a manual
-   paste field in Settings ("Apps Script Web App URL") is the only way to register it; folding it
-   into the existing onboarding QR is still open. Not yet verified on-device. See 2do2go's
-   `SPEC.md`/`PUNCH_LIST.md` item 1 for its side (ingestion gating, progress tracking, completion
-   actions, priority weighting).
+   (`EisenhowerReferralScreen`) that writes raw unweighted importance/urgency values. The
+   onboarding page's combined Sheet-URL + Web App URL QR is built on the MicroTasking side
+   (commit `e3cf305`); it is superseded by item 9's single connection code. Not yet verified
+   on-device. See ActiveTasks's `SPEC.md`/`PUNCH_LIST.md` item 1 for its side (ingestion gating,
+   progress tracking, completion actions, priority weighting).
+
+9. **Sheet connection & API (private Sheet, shared contract for both apps)** — *specified
+   2026-09-19 in `SPEC.md` "Sheet connection & API"; nothing built yet.* Goal: the Sheet can stay
+   private; both apps read and write it (add a row, delete a row, set/clear importance+urgency)
+   only through the Sheet-bound Apps Script Web App, protected by a secret key carried in one
+   "connection code" (one setup QR works in both apps). Build in this order — each phase ends at
+   a checkpoint so nothing downstream is written against an unverified contract:
+   - **Phase 1 — the script** (`scripts/populate_google_sheet.js`; do this first, everything else
+     depends on it):
+     1. Key + envelope: random key in Script Properties, `key=` check on every `doGet`/`doPost`
+        (`unauthorized`), error envelope `{"ok":false,"code","error"}`, `hello` (`apiVersion: 2`),
+        menu items **Show connection code** / **Reset connection code**. Verify
+        `ScriptApp.getService().getUrl()` returns the `/exec` URL (SPEC open question); if not,
+        fall back to showing the key alone.
+     2. Header-based column lookup (`Description`/`Link`/`Importance`/`Urgency`, column A always
+        the checkbox) replacing the hardcoded B–E ranges in `doGet`/`doPost`/`ensureReferralColumns_`.
+     3. `getTasks` (Sheet-order tabs, empty tabs included, blank-A = enabled, hyperlink targets,
+        `needsRepair` for headerless tabs; never writes). Keep `getPriorities` as the legacy shape.
+     4. `createRow` / `createTab` (validation incl. README/`/`/100-char/link scheme, literal-text
+        descriptions so `=…` never evaluates, create + format a missing tab at the far right,
+        repair a headerless tab first, append after the last *described* row, checkbox, upsert of
+        an existing row's priority).
+     5. `setPriority`/`clearPriority`/`deleteRow` moved to the new codes and idempotency rules
+        (`no_such_tab`/`no_such_row`; clear/delete of a missing row = success), repairing the
+        referral columns on demand; **every write under `LockService.getScriptLock()`** (`busy`).
+     6. README text in both `populate_google_sheet.js` and `generate_sheet_template.py`: drop
+        "Anyone with the link", describe the connection code. Bump `TEMPLATE_VERSION` /
+        `versionBase` together at the end of the item, not per step.
+     7. **Tests.** Pull the pure logic (validation, header lookup, row resolution, response
+        shaping) into functions a Node test (`node --test`, wired to `npm test`) can run against a
+        small in-memory `SpreadsheetApp` fake — there is no Apps Script test harness today. Plus a
+        manual checklist on a throwaway copy of the template: wrong/missing key, reset key,
+        hand-added tab then `createRow`, rename a tab then `setPriority` (`no_such_tab`), delete a
+        row twice, a `=1+1` description, two near-simultaneous creates, a headerless tab, and the
+        redeploy flow (old deployment → `unknown_action` → "redeploy").
+     - **Checkpoint:** `npm run push:sheet`, Run setup, redeploy as **New version** of the
+       *existing* deployment (not a new deployment — that changes the URL), and exercise every
+       call with `curl` against Vern's own Sheet made private.
+   - **Phase 2 — MicroTasking app:** (1) store the connection code (reuse the `web_app_url`
+     pref), mask the key in Settings, redact `key=` in `DiagnosticLog` and error text; (2) extend
+     `WebAppClient` — `hello`, `getTasks`, `createRow`, `deleteRow`, error-code parsing — with
+     JVM tests against a local HTTP stub; (3) update `parseSetupQr` + `SetupQrTest`
+     (uncommitted today) for the single-line code; (4) import via `getTasks`, legacy xlsx/gviz
+     read kept as the fallback, and an `apiVersion`/`unknown_action` check that shows the
+     "redeploy your Sheet's script" banner; (5) contract error handling (`no_such_*` → notice +
+     resync, `unauthorized` → rescan message, `busy` → one retry); (6) My Tasks "Add task" →
+     `createRow` when connected (local `custom-` when not) with the successful add mirrored under
+     its `external-…` id, one-time "Upload to Sheet" for existing `custom-` tasks, and Task Pool
+     "Delete from Sheet" with confirm.
+   - **Phase 3 — ActiveTasks** (its own repo; tracked in its `PUNCH_LIST.md`): `parseSetupQr` in the
+     scanner (today it dumps the scanned text into the Sheet-URL field), connection-code
+     setting, `SheetApiClient` rewrite (stop swallowing errors into an empty list, fix the
+     `"$url?action=…"` concatenation so an existing `?key=` survives, add `getTasks`/`createRow`/
+     `setPriority`), sync via `getTasks`, **Add item** screen, re-triage write-through.
+   - **Phase 4 — onboarding page** (`scripts/generate_install_page.py`): one **Connection code**
+     box replacing the two URL boxes, validation for editor-address / `/dev` / missing-`key=`
+     mix-ups, remove the "Anyone with the link" step, and make ActiveTasks's install page link to it.
+     Ship this **after** ActiveTasks's `parseSetupQr`: MicroTasking already tolerates the new
+     one-line code, but today's ActiveTasks scanner would mangle it.
+   - **Phase 5 — end-to-end on a device** (also closes item 8's unverified round trip): private
+     Sheet, fresh install of both apps, scan one QR into each, import, add from each app, refer,
+     re-triage, Complete (for now), Fully complete, a hand edit made mid-flight (rename a tab,
+     delete a row), Reset connection code → both apps show the rescan message, and a not-yet-
+     redeployed script → the redeploy banner. Push the branch, then manually trigger the
+     release workflow (`gh workflow run "Build & release APK" --ref <branch>`).
+   - Out of scope for this item: renaming/deleting tabs through the API, editing an existing
+     row's text through the API, an offline write queue, per-user sign-in (all noted in the SPEC).

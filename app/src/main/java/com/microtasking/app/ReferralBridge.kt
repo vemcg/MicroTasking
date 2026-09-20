@@ -7,9 +7,32 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.charset.StandardCharsets
 
+/** What a scanned setup QR code carried: either value may be absent (see [parseSetupQr]). */
+data class SetupQrPayload(val sheetUrl: String?, val webAppUrl: String?)
+
 /**
- * Client for the per-user Apps Script Web App (see SPEC.md "Sheet write-back (Apps Script Web
- * App)") - the only path this app uses to read or write the hidden Importance/Urgency columns.
+ * Apps Script Web App URLs live on script.google.com (`/macros/s/<id>/exec`, or
+ * `/a/macros/<domain>/s/<id>/exec` for Workspace accounts); a Google Sheet URL never does.
+ */
+fun looksLikeWebAppUrl(text: String): Boolean =
+    text.startsWith("http", ignoreCase = true) && text.contains("script.google.com/", ignoreCase = true)
+
+/**
+ * Splits the onboarding page's QR text (one URL per line) into its sheet URL and Web App URL by
+ * what each line looks like rather than by position, so a code carrying only the Web App URL, only
+ * the sheet URL (older codes), or both in either order all work.
+ */
+fun parseSetupQr(scannedText: String): SetupQrPayload {
+    val lines = scannedText.lines().map { it.trim() }.filter { it.isNotEmpty() }
+    return SetupQrPayload(
+        sheetUrl = lines.firstOrNull { !looksLikeWebAppUrl(it) },
+        webAppUrl = lines.firstOrNull { looksLikeWebAppUrl(it) }
+    )
+}
+
+/**
+ * Client for the per-user Apps Script Web App (see SPEC.md "Sheet connection & API (Apps Script
+ * Web App)") - the only path this app uses to read or write the hidden Importance/Urgency columns.
  * Column A-C (checkbox/description/link) reads stay on the existing CSV/gviz path in
  * [importExternalTasksFromSheet]; this is deliberately separate.
  *
@@ -43,8 +66,8 @@ object WebAppClient {
         ).map { }
 
     /**
-     * Clears a row's Importance/Urgency (2do2go's "Complete (for now)" - included here for
-     * completeness/testing even though this app's own UI doesn't trigger it; 2do2go calls the
+     * Clears a row's Importance/Urgency (ActiveTasks's "Complete (for now)" - included here for
+     * completeness/testing even though this app's own UI doesn't trigger it; ActiveTasks calls the
      * same endpoint directly).
      */
     fun clearPriority(webAppUrl: String, category: String, description: String): Result<Unit> =
@@ -83,8 +106,23 @@ object WebAppClient {
         }
     }
 
+    /**
+     * Blank/non-http(s) URLs would otherwise surface as `MalformedURLException: no protocol: `,
+     * which tells the user nothing - say what to actually do instead.
+     */
+    private fun requireWebAppUrl(webAppUrl: String): String {
+        val trimmed = webAppUrl.trim()
+        if (trimmed.isEmpty()) {
+            error("No Web App URL is set yet. Add it in Settings (the \"Apps Script Web App URL\" field), then try again.")
+        }
+        if (!trimmed.startsWith("https://") && !trimmed.startsWith("http://")) {
+            error("The Web App URL in Settings doesn't look right - it should start with https://script.google.com/...")
+        }
+        return trimmed
+    }
+
     private fun post(webAppUrl: String, body: JSONObject): Result<JSONObject> = runCatching {
-        val connection = (URL(webAppUrl).openConnection() as HttpURLConnection).apply {
+        val connection = (URL(requireWebAppUrl(webAppUrl)).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             doOutput = true
             connectTimeout = CONNECT_TIMEOUT_MS

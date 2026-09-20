@@ -21,15 +21,18 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -40,6 +43,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -356,7 +360,7 @@ fun MicroTaskingApp(
     }
 
     /**
-     * "Refer to 2do2go" (see SPEC.md "Task referral to 2do2go"): writes importance/urgency to the
+     * "Refer to ActiveTasks" (see SPEC.md "Task referral to ActiveTasks"): writes importance/urgency to the
      * task's Sheet row via the Apps Script Web App, and on success stamps ManagedTask.referredAt
      * locally right away (not waiting on the next sync) and removes the task from the queue with
      * a replacement backfilled in its slot - a neutral outcome, same as Substitute, whether or not
@@ -601,19 +605,25 @@ fun MicroTaskingApp(
         QrScannerScreen(
             onResult = { scannedText ->
                 showingQrScanner = false
-                // The onboarding page's QR carries the sheet URL alone, or - when a Web App URL
-                // was also filled in there - both, newline-separated (sheet URL first). A plain
-                // single-line scan (older codes, or no Web App URL entered) works exactly as
-                // before. See scripts/generate_install_page.py's buildQrPayload.
-                val lines = scannedText.lines().map { it.trim() }.filter { it.isNotEmpty() }
-                val scannedUrl = lines.firstOrNull() ?: scannedText
-                savedSheetUrl = scannedUrl
-                onSheetUrlSaved(scannedUrl)
-                lines.getOrNull(1)?.let { webAppUrl ->
+                // The onboarding page's QR carries the sheet URL, the Apps Script Web App URL, or
+                // both (newline-separated). Each line is classified by what it looks like, so a
+                // Web-App-only code just registers that URL without touching the sheet import.
+                // See parseSetupQr and scripts/generate_install_page.py's buildQrPayload.
+                val payload = parseSetupQr(scannedText)
+                payload.webAppUrl?.let { webAppUrl ->
                     savedWebAppUrl = webAppUrl
                     onWebAppUrlSaved(webAppUrl)
                 }
-                runSheetImport(scannedUrl)
+                val scannedSheetUrl = payload.sheetUrl
+                if (scannedSheetUrl != null) {
+                    savedSheetUrl = scannedSheetUrl
+                    onSheetUrlSaved(scannedSheetUrl)
+                    runSheetImport(scannedSheetUrl)
+                } else if (payload.webAppUrl != null) {
+                    sheetImportMessage = "Web App URL saved - \"Refer to ActiveTasks\" is ready to use."
+                } else {
+                    sheetImportMessage = "That QR code was empty - nothing was imported."
+                }
             },
             onCancel = { showingQrScanner = false }
         )
@@ -892,26 +902,20 @@ fun TaskPromptScreen(
                         TaskLifecycleState.READY -> {
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
                                 Button(modifier = Modifier.weight(1f), onClick = { onStart(task.id) }) { Text("Start") }
+                                ReferButton { onRefer(task.id) }
                                 Button(modifier = Modifier.weight(1f), onClick = { onSubstitute(task.id) }) { Text("Substitute") }
                             }
                         }
                         TaskLifecycleState.STARTED -> {
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
                                 Button(modifier = Modifier.weight(1f), onClick = { onComplete(task.id) }) { Text("Done") }
+                                ReferButton { onRefer(task.id) }
                                 Button(modifier = Modifier.weight(1f), onClick = { onAbandon(task.id) }) { Text("Abandon") }
                             }
                         }
                         else -> {
                             Button(modifier = Modifier.fillMaxWidth(), onClick = onNextPrompt) { Text("Next task") }
                         }
-                    }
-                    // Available in any state (Ready or Started, not just pre-Start) - see SPEC.md
-                    // "Task referral to 2do2go". Referring a Started task discards its timer.
-                    if (entry.isActionable()) {
-                        OutlinedButton(
-                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                            onClick = { onRefer(task.id) }
-                        ) { Text("Refer to 2do2go") }
                     }
                 }
             }
@@ -954,11 +958,25 @@ fun TaskPromptScreen(
 }
 
 /**
- * Full-screen Eisenhower-matrix touch capture for "Refer to 2do2go" (see SPEC.md "Task referral
- * to 2do2go"). Records the *precise* touch position, not just which quadrant it lands in: the
+ * The "Refer to ActiveTasks" hand-off button (see SPEC.md "Task referral to ActiveTasks"): a plain filled
+ * Button, so it matches Start/Substitute/Done/Abandon, holding a white arrow pointing toward the
+ * other app. Sits in the middle of the Ready (Start / Substitute) and Started (Done / Abandon)
+ * rows, which are exactly the two states where referral is available; referring a Started task
+ * discards its timer.
+ */
+@Composable
+private fun RowScope.ReferButton(onClick: () -> Unit) {
+    Button(modifier = Modifier.weight(1f), onClick = onClick) {
+        Icon(Icons.Filled.ArrowForward, contentDescription = "Refer to ActiveTasks")
+    }
+}
+
+/**
+ * Full-screen Eisenhower-matrix touch capture for "Refer to ActiveTasks" (see SPEC.md "Task referral
+ * to ActiveTasks"). Records the *precise* touch position, not just which quadrant it lands in: the
  * matrix box's horizontal position maps to urgency (left edge = 1.0, right edge = 0.0) and
  * vertical position maps to importance (top edge = 1.0, bottom edge = 0.0) - two continuous
- * floats, matching the quadrant layout 2do2go's own triage widget uses (Important/Not important
+ * floats, matching the quadrant layout ActiveTasks's own triage widget uses (Important/Not important
  * rows, Urgent/Not urgent columns; top-left = "Do First"). Two-step: tap/drag to place the
  * marker, then a separate Confirm button actually submits - a single accidental tap shouldn't
  * commit a referral.
@@ -976,7 +994,7 @@ fun EisenhowerReferralScreen(
 
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
-            title = { Text("Refer to 2do2go") },
+            title = { Text("Refer to ActiveTasks") },
             navigationIcon = {
                 IconButton(onClick = onCancel) {
                     Icon(Icons.Filled.ArrowBack, contentDescription = "Cancel")
@@ -998,46 +1016,54 @@ fun EisenhowerReferralScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
+            // The matrix is a square (the largest one that fits the space left over), centered.
+            // The touch handlers live on the square itself so the fractions are relative to it.
             BoxWithConstraints(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .pointerInput(task.id) {
-                        detectTapGestures { offset ->
-                            markerFraction = Offset(
-                                (offset.x / size.width).coerceIn(0f, 1f),
-                                (offset.y / size.height).coerceIn(0f, 1f)
-                            )
-                        }
-                    }
-                    .pointerInput(task.id) {
-                        detectDragGestures { change, _ ->
-                            markerFraction = Offset(
-                                (change.position.x / size.width).coerceIn(0f, 1f),
-                                (change.position.y / size.height).coerceIn(0f, 1f)
-                            )
-                        }
-                    }
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                contentAlignment = Alignment.Center
             ) {
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    val midX = size.width / 2f
-                    val midY = size.height / 2f
-                    val gridColor = Color.Gray
-                    drawRect(color = gridColor, size = size, style = Stroke(width = 2f))
-                    drawLine(gridColor, Offset(midX, 0f), Offset(midX, size.height), strokeWidth = 2f)
-                    drawLine(gridColor, Offset(0f, midY), Offset(size.width, midY), strokeWidth = 2f)
-                    markerFraction?.let { fraction ->
-                        drawCircle(
-                            color = Color.Red,
-                            radius = 18f,
-                            center = Offset(fraction.x * size.width, fraction.y * size.height)
-                        )
+                Box(
+                    modifier = Modifier
+                        .size(minOf(maxWidth, maxHeight))
+                        .pointerInput(task.id) {
+                            detectTapGestures { offset ->
+                                markerFraction = Offset(
+                                    (offset.x / size.width).coerceIn(0f, 1f),
+                                    (offset.y / size.height).coerceIn(0f, 1f)
+                                )
+                            }
+                        }
+                        .pointerInput(task.id) {
+                            detectDragGestures { change, _ ->
+                                markerFraction = Offset(
+                                    (change.position.x / size.width).coerceIn(0f, 1f),
+                                    (change.position.y / size.height).coerceIn(0f, 1f)
+                                )
+                            }
+                        }
+                ) {
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        val midX = size.width / 2f
+                        val midY = size.height / 2f
+                        val gridColor = Color.Gray
+                        drawRect(color = gridColor, size = size, style = Stroke(width = 2f))
+                        drawLine(gridColor, Offset(midX, 0f), Offset(midX, size.height), strokeWidth = 2f)
+                        drawLine(gridColor, Offset(0f, midY), Offset(size.width, midY), strokeWidth = 2f)
+                        markerFraction?.let { fraction ->
+                            drawCircle(
+                                color = Color.Red,
+                                radius = 18f,
+                                center = Offset(fraction.x * size.width, fraction.y * size.height)
+                            )
+                        }
                     }
+                    // Urgency labels sit at the vertical middle of the left/right edges so they
+                    // don't crowd the "Important" label at the top center.
+                    Text("Urgent", modifier = Modifier.align(Alignment.CenterStart).padding(6.dp), style = MaterialTheme.typography.labelMedium)
+                    Text("Not urgent", modifier = Modifier.align(Alignment.CenterEnd).padding(6.dp), style = MaterialTheme.typography.labelMedium)
+                    Text("Important", modifier = Modifier.align(Alignment.TopCenter).padding(6.dp), style = MaterialTheme.typography.labelMedium)
+                    Text("Not important", modifier = Modifier.align(Alignment.BottomCenter).padding(6.dp), style = MaterialTheme.typography.labelMedium)
                 }
-                Text("Urgent", modifier = Modifier.align(Alignment.TopStart).padding(6.dp), style = MaterialTheme.typography.labelMedium)
-                Text("Not urgent", modifier = Modifier.align(Alignment.TopEnd).padding(6.dp), style = MaterialTheme.typography.labelMedium)
-                Text("Important", modifier = Modifier.align(Alignment.TopCenter).padding(6.dp), style = MaterialTheme.typography.labelMedium)
-                Text("Not important", modifier = Modifier.align(Alignment.BottomCenter).padding(6.dp), style = MaterialTheme.typography.labelMedium)
             }
 
             if (errorMessage != null) {
@@ -1277,7 +1303,7 @@ fun SettingsScreen(
                                 )
                             }
                             Text(
-                                "Apps Script Web App URL, for \"Refer to 2do2go\" - deploy it once from this " +
+                                "Apps Script Web App URL, for \"Refer to ActiveTasks\" - deploy it once from this " +
                                     "same Sheet's Extensions → Apps Script editor (Deploy → New deployment → " +
                                     "Web app) and paste the URL it gives you.",
                                 style = MaterialTheme.typography.bodySmall,

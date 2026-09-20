@@ -18,12 +18,12 @@ data class ManagedTask(
     val enabled: Boolean = true,
     val temporarilyUnavailable: Boolean = false,
     val neverSuggest: Boolean = false,
-    // Epoch ms this task was referred to 2do2go, null = not referred. Set locally the instant a
+    // Epoch ms this task was referred to ActiveTasks, null = not referred. Set locally the instant a
     // referral write succeeds (see MainActivity's referral flow), then overwritten from the
     // sheet's Importance/Urgency state at every sync (see refreshReferralState in this file) -
     // a dedicated field, deliberately not a reuse of neverSuggest, which mergeImportedManagedTasks
     // below must instead *preserve* untouched across every re-sync. See SPEC.md
-    // "Task referral to 2do2go".
+    // "Task referral to ActiveTasks".
     val referredAt: Long? = null
 )
 
@@ -154,7 +154,7 @@ fun writeManagedTasks(tasks: List<ManagedTask>): String = JSONArray().apply {
  *
  * [ManagedTask.referredAt] is carried over here too, same as the other two flags - this CSV-based
  * import never knows about it either way (Importance/Urgency aren't CSV columns, see SPEC.md
- * "Sheet write-back"). It's [refreshReferralState] below, called separately against the Apps
+ * "Sheet connection & API"). It's [refreshReferralState] below, called separately against the Apps
  * Script Web App, that's actually authoritative for it.
  */
 fun mergeImportedManagedTasks(

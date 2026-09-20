@@ -19,12 +19,12 @@
  *        (re)installs the edit triggers. Run this once in every copy, and after adding tabs.
  *      - "Rebuild everything from template": the full setupMicroTaskingSheet (wipes the built-in
  *        category tabs back to the canonical task list).
- * 8. OPTIONAL, only needed for "Refer to 2do2go" (MicroTasking) / referred-item actions
- *    (2do2go): in this same editor, Deploy -> New deployment -> pick type "Web app" -> Execute
+ * 8. OPTIONAL, only needed for "Refer to ActiveTasks" (MicroTasking) / referred-item actions
+ *    (ActiveTasks): in this same editor, Deploy -> New deployment -> pick type "Web app" -> Execute
  *    as "Me", Who has access "Anyone with the link" -> Deploy. Paste the URL it gives you into
  *    both apps' Settings ("Apps Script Web App URL"). One deployment per Sheet copy; re-running
  *    "Repair headers & triggers"/"Rebuild everything from template" later doesn't require
- *    re-deploying. See SPEC.md "Sheet write-back (Apps Script Web App)".
+ *    re-deploying. See SPEC.md "Sheet connection & API (Apps Script Web App)".
  *
  * The live behavior (auto-header a new tab, checkbox-on-type, master A1 toggle) runs on TWO
  * *installable* triggers (onGridChange_, onSheetEdit_) that setupMicroTaskingSheet / repairSheet_
@@ -73,7 +73,7 @@ function setupMicroTaskingSheet() {
     [""],
     ["TWO APPS SHARE THIS SHEET:"],
     ["   - MicroTasking (Android): periodically prompts you with a random task from the tabs below, pulled from your checked/enabled rows."],
-    ["   - 2do2go (Android, optional companion app): a traditional to-do list. It only shows tasks you've explicitly referred to it from MicroTasking's task queue ('Refer to 2do2go') - it does not mirror every row in this sheet. See section 4 below if you use it."],
+    ["   - ActiveTasks (Android, optional companion app): a traditional to-do list. It only shows tasks you've explicitly referred to it from MicroTasking's task queue ('Refer to ActiveTasks') - it does not mirror every row in this sheet. See section 4 below if you use it."],
     [""],
     ["HOW TO USE THIS SPREADSHEET:"],
     [""],
@@ -93,8 +93,8 @@ function setupMicroTaskingSheet() {
     ["   - Paste your Sheet URL into the onboarding page to generate your custom QR code."],
     ["   - In the MicroTasking app, tap Settings -> Import External Task Pool -> Scan QR Code."],
     [""],
-    ["4. REFERRING A TASK TO 2DO2GO (OPTIONAL):"],
-    ["   - Only needed if you also use the 2do2go companion app. In this Sheet's Extensions -> Apps Script editor: Deploy -> New deployment -> Web app -> Execute as Me, Who has access Anyone with the link -> Deploy."],
+    ["4. REFERRING A TASK TO ACTIVETASKS (OPTIONAL):"],
+    ["   - Only needed if you also use the ActiveTasks companion app. In this Sheet's Extensions -> Apps Script editor: Deploy -> New deployment -> Web app -> Execute as Me, Who has access Anyone with the link -> Deploy."],
     ["   - Paste the resulting URL into both apps' Settings ('Apps Script Web App URL')."],
     ["   - This adds two hidden columns (Importance, Urgency) to each task tab - don't unhide or edit them by hand, both apps manage them."]
   ];
@@ -346,9 +346,9 @@ function applyCategoryTabHeader_(sheet) {
 }
 
 /**
- * Adds/repairs the D (Importance) / E (Urgency) columns MicroTasking's "Refer to 2do2go" feature
- * and 2do2go's own triage both write through the doPost endpoints below (see SPEC.md "Task
- * referral to 2do2go" / "Sheet write-back"). Both columns are hidden and covered by a
+ * Adds/repairs the D (Importance) / E (Urgency) columns MicroTasking's "Refer to ActiveTasks" feature
+ * and ActiveTasks's own triage both write through the doPost endpoints below (see SPEC.md "Task
+ * referral to ActiveTasks" / "Sheet connection & API"). Both columns are hidden and covered by a
  * warning-only protected range - not a hard lock (a warning-only protection doesn't block
  * script-driven edits at all, only shows a click-through warning in the Sheets UI), just enough
  * to keep an accidental manual edit from silently corrupting referral state. Idempotent - safe to
@@ -369,7 +369,7 @@ function ensureReferralColumns_(sheet) {
   });
   if (!alreadyProtected) {
     range.protect()
-      .setDescription("MicroTasking/2do2go referral state - edit via the apps, not by hand")
+      .setDescription("MicroTasking/ActiveTasks referral state - edit via the apps, not by hand")
       .setWarningOnly(true);
   }
 }
@@ -509,7 +509,7 @@ function addRowCheckbox_(sheet, row) {
 }
 
 /**
- * === Web App endpoints (MicroTasking <-> 2do2go referral bridge) ===
+ * === Web App endpoints (MicroTasking <-> ActiveTasks referral bridge) ===
  *
  * Deploy from THIS sheet's bound Apps Script editor: Deploy -> New deployment -> Web app,
  * "Execute as: Me", "Who has access: Anyone with the link" (the resulting URL, not any
@@ -519,11 +519,11 @@ function addRowCheckbox_(sheet, row) {
  *
  * Row identity is (category = tab name, description = column B text), never a row/gid index -
  * see the comment on ensureReferralColumns_ and DEFECTS-style reasoning in SPEC.md "Task
- * referral to 2do2go": rows shift under onSheetEdit_'s delete-row-on-empty-description behavior,
+ * referral to ActiveTasks": rows shift under onSheetEdit_'s delete-row-on-empty-description behavior,
  * so a cached row index would eventually point at the wrong row.
  *
- * See MicroTasking's SPEC.md "Sheet write-back (Apps Script Web App)" and 2do2go's SPEC.md
- * "Referred item status & completion" for the two apps' side of this contract.
+ * See MicroTasking's SPEC.md "Sheet connection & API (Apps Script Web App)" and ActiveTasks's SPEC.md
+ * "Referral bridge" for the two apps' side of this contract.
  */
 
 /** GET ?action=getPriorities -> {"ok":true,"rows":[{"category","description","importance","urgency"}, ...]} */
@@ -563,9 +563,9 @@ function doGet(e) {
 /**
  * POST body (JSON): {"action": "setPriority"|"clearPriority"|"deleteRow", "category", "description", ...}
  *  - setPriority: also "importance" (number 0-1), "urgency" (number 0-1). Written by MicroTasking
- *    on referral, and by 2do2go on re-triage.
- *  - clearPriority: blanks D/E for that row. 2do2go's "Complete (for now)".
- *  - deleteRow: removes the row entirely. 2do2go's "Fully complete".
+ *    on referral, and by ActiveTasks on re-triage.
+ *  - clearPriority: blanks D/E for that row. ActiveTasks's "Complete (for now)".
+ *  - deleteRow: removes the row entirely. ActiveTasks's "Fully complete".
  */
 function doPost(e) {
   try {
