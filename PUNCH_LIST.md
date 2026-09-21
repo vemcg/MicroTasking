@@ -140,6 +140,9 @@ Next work session: make onboarding, import, the spreadsheet template, persistenc
      setting, `SheetApiClient` rewrite (stop swallowing errors into an empty list, fix the
      `"$url?action=…"` concatenation so an existing `?key=` survives, add `getTasks`/`createRow`/
      `setPriority`), sync via `getTasks`, **Add item** screen, re-triage write-through.
+   - **Interim, done 2026-09-20:** the page now makes two separate single-line QRs (Sheet URL,
+     Web App URL) in a shared `#setup` section, because the old combined QR got its Sheet URL
+     overwritten by ActiveTasks' scanner. ActiveTasks still needs `parseSetupQr` to use them.
    - **Phase 4 — onboarding page** (`scripts/generate_install_page.py`): one **Connection code**
      box replacing the two URL boxes, validation for editor-address / `/dev` / missing-`key=`
      mix-ups, remove the "Anyone with the link" step, and make ActiveTasks's install page link to it.

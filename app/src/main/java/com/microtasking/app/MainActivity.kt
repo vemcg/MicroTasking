@@ -605,10 +605,11 @@ fun MicroTaskingApp(
         QrScannerScreen(
             onResult = { scannedText ->
                 showingQrScanner = false
-                // The onboarding page's QR carries the sheet URL, the Apps Script Web App URL, or
-                // both (newline-separated). Each line is classified by what it looks like, so a
-                // Web-App-only code just registers that URL without touching the sheet import.
-                // See parseSetupQr and scripts/generate_install_page.py's buildQrPayload.
+                // The onboarding page makes two separate QR codes - one carries the sheet URL, the
+                // other the Apps Script Web App URL (older codes carried both, newline-separated).
+                // Each line is classified by what it looks like, so a Web-App-only code just
+                // registers that URL without touching the sheet import, and vice versa.
+                // See parseSetupQr and scripts/generate_install_page.py's generateSheetQr/generateWebAppQr.
                 val payload = parseSetupQr(scannedText)
                 payload.webAppUrl?.let { webAppUrl ->
                     savedWebAppUrl = webAppUrl
@@ -1227,7 +1228,7 @@ fun SettingsScreen(
     var sheetUrl by remember { mutableStateOf(initialSheetUrl) }
     var webAppUrl by remember { mutableStateOf(initialWebAppUrl) }
     // Accordion: at most one section open at a time. "" means all collapsed.
-    var openSection by remember { mutableStateOf("Import External Task Pool") }
+    var openSection by remember { mutableStateOf("Google Sheet Connection") }
     val focusManager = LocalFocusManager.current
 
     @Composable
@@ -1267,10 +1268,12 @@ fun SettingsScreen(
             item {
                 OutlinedCard(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        sectionHeader("Import External Task Pool")
-                        if (openSection == "Import External Task Pool") {
+                        // Same section, wording and control order as ActiveTasks' Settings: why a
+                        // Sheet URL -> box -> Scan; why a Web App URL -> box -> Scan; one action button.
+                        sectionHeader("Google Sheet Connection")
+                        if (openSection == "Google Sheet Connection") {
                             Text(
-                                "Paste your Google Sheet URL into the onboarding page, then tap Scan QR Code below to register it here with your phone's camera. Each tab in the sheet (except a tab named \"README\") becomes a task category. Tasks import automatically right after a scan; use Update Tasks any time afterward to re-sync.",
+                                "Your tasks live in a Google Sheet you own. Paste its URL, or scan the Sheet QR code from the onboarding page, so the app can read it - each tab (except one named \"README\") becomes a task category.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -1278,7 +1281,7 @@ fun SettingsScreen(
                                 value = sheetUrl,
                                 onValueChange = { sheetUrl = it },
                                 modifier = Modifier.fillMaxWidth(),
-                                label = { Text("Google Sheet / CSV URL") },
+                                label = { Text("Google Sheet URL") },
                                 placeholder = { Text("https://docs.google.com/spreadsheets/d/...") },
                                 singleLine = true
                             )
@@ -1286,7 +1289,32 @@ fun SettingsScreen(
                                 modifier = Modifier.fillMaxWidth(),
                                 onClick = onOpenQrScanner
                             ) {
-                                Text("Scan QR Code")
+                                Text("Scan Sheet QR Code")
+                            }
+                            Text(
+                                "The Web App is a small script inside your Sheet that lets the app write back to it - " +
+                                    "referring a task to ActiveTasks. Deploy it once from your Sheet (Extensions → " +
+                                    "Apps Script → Deploy → New deployment → Web app), then paste its URL or scan " +
+                                    "its QR code from the onboarding page.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            OutlinedTextField(
+                                value = webAppUrl,
+                                onValueChange = {
+                                    webAppUrl = it
+                                    onWebAppUrlChanged(it.trim())
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("Apps Script Web App URL") },
+                                placeholder = { Text("https://script.google.com/macros/s/.../exec") },
+                                singleLine = true
+                            )
+                            Button(
+                                modifier = Modifier.fillMaxWidth(),
+                                onClick = onOpenQrScanner
+                            ) {
+                                Text("Scan Web App QR Code")
                             }
                             Button(
                                 modifier = Modifier.fillMaxWidth(),
@@ -1302,24 +1330,6 @@ fun SettingsScreen(
                                     color = MaterialTheme.colorScheme.primary
                                 )
                             }
-                            Text(
-                                "Apps Script Web App URL, for \"Refer to ActiveTasks\" - deploy it once from this " +
-                                    "same Sheet's Extensions → Apps Script editor (Deploy → New deployment → " +
-                                    "Web app) and paste the URL it gives you.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            OutlinedTextField(
-                                value = webAppUrl,
-                                onValueChange = {
-                                    webAppUrl = it
-                                    onWebAppUrlChanged(it.trim())
-                                },
-                                modifier = Modifier.fillMaxWidth(),
-                                label = { Text("Apps Script Web App URL") },
-                                placeholder = { Text("https://script.google.com/macros/s/.../exec") },
-                                singleLine = true
-                            )
                         }
                     }
                 }

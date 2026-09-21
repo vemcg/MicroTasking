@@ -53,7 +53,7 @@ README_CONTENT = [
     ["3. SYNCING WITH THE APP:"],
     ["   - Set Share permissions to 'Anyone with the link can view'."],
     ["   - Paste your Sheet URL into the onboarding page to generate your custom QR code."],
-    ["   - In the MicroTasking app, tap Settings -> Import External Task Pool -> Scan QR Code."],
+    ["   - In the MicroTasking app, tap Settings -> Google Sheet Connection -> Scan Sheet QR Code."],
     [""],
     ["4. REFERRING A TASK TO ACTIVETASKS (OPTIONAL):"],
     ["   - Only needed if you also use the ActiveTasks companion app. In this Sheet's Extensions -> Apps Script editor: Deploy -> New deployment -> Web app -> Execute as Me, Who has access Anyone with the link -> Deploy."],

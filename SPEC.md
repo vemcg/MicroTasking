@@ -454,6 +454,20 @@ as `custom-` tasks) becomes the on-the-go entry point:
   Sheet-URL field).
 - **On scan**: MicroTasking saves the code, calls `hello`, then runs a full `getTasks` import;
   ActiveTasks saves it and syncs.
+- **Interim (2026-09-20, built): two separate QR codes.** Until the connection code exists, the
+  onboarding page's setup step (`#setup`, shared by both apps) has one box and one single-line QR
+  for the Sheet URL and another for the Web App URL — not one combined two-line code. Each app
+  must update only the setting the scanned line belongs to (`parseSetupQr`); a scan never blanks
+  the other setting. ActiveTasks' scanner still writes raw scanned text into its Sheet-URL field,
+  so it overwrites the Sheet URL when given the Web App code — it must adopt `parseSetupQr` (see
+  its `PUNCH_LIST.md` item 3) before both codes are usable there. Its install page links to this
+  section rather than repeating the steps.
+  **Settings layout (both apps, identical):** one section titled **Google Sheet Connection**,
+  top to bottom: why a Sheet URL is needed → "Google Sheet URL" box → **Scan Sheet QR Code**; why
+  the Web App URL is needed → "Apps Script Web App URL" box → **Scan Web App QR Code**; then a
+  single action button (MicroTasking **Update Tasks**, ActiveTasks **Sync Lists**) and its status
+  message. Both scan buttons open the same scanner and route the result by content
+  (`parseSetupQr`), never by which button was pressed.
 - **Onboarding page** (`scripts/generate_install_page.py`): the two boxes (Sheet URL, Web App URL)
   become one **Connection code** box, with the "set sharing to Anyone with the link" instruction
   removed. Validation flags the two common mix-ups: the Apps Script *editor* address
