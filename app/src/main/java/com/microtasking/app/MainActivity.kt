@@ -78,6 +78,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -85,6 +86,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -330,6 +333,11 @@ fun MicroTaskingApp(
     var queueFullFlashUntil by remember { mutableLongStateOf(0L) }
     var isImportingSheet by remember { mutableStateOf(false) }
     var sheetImportMessage by remember { mutableStateOf<String?>(null) }
+    // A sync already in flight was fetched before whatever change just happened, so its result is
+    // stale: [resyncPending] queues one more sync behind it, and [referredDuringSync] keeps the
+    // stale result from un-referring a task referred while it was running.
+    var resyncPending by remember { mutableStateOf(false) }
+    val referredDuringSync = remember { mutableSetOf<String>() }
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
     val availableCategories = (savedManagedTasks.map { it.category } + savedUserTasks.map { it.category })
@@ -357,49 +365,6 @@ fun MicroTaskingApp(
     fun persistManagedTasks(newTasks: List<ManagedTask>) {
         savedManagedTasks = newTasks
         onManagedTasksSaved(newTasks)
-    }
-
-    /**
-     * "Refer to ActiveTasks" (see SPEC.md "Task referral to ActiveTasks"): writes importance/urgency to the
-     * task's Sheet row via the Apps Script Web App, and on success stamps ManagedTask.referredAt
-     * locally right away (not waiting on the next sync) and removes the task from the queue with
-     * a replacement backfilled in its slot - a neutral outcome, same as Substitute, whether or not
-     * the task had already been Started.
-     */
-    fun submitReferral(taskId: String, importance: Double, urgency: Double) {
-        val task = taskQueue.find { it.task.id == taskId }?.task ?: return
-        referralInFlightTaskId = taskId
-        referralErrorMessage = null
-        coroutineScope.launch {
-            val result = withContext(Dispatchers.IO) {
-                WebAppClient.setPriority(savedWebAppUrl, task.category, task.description, importance, urgency)
-            }
-            referralInFlightTaskId = null
-            result.onSuccess {
-                DiagnosticLog.log(context, "REFERRED", "task=$taskId category=${task.category} importance=$importance urgency=$urgency")
-                val updatedTasks = savedManagedTasks.map {
-                    if (it.id == taskId) it.copy(referredAt = System.currentTimeMillis()) else it
-                }
-                persistManagedTasks(updatedTasks)
-                val freshPromptTasks = eligiblePromptTasks(updatedTasks, savedUserTasks, savedCategories)
-                val queuedTaskIds = taskQueue.map { it.task.id }.toSet()
-                val candidates = freshPromptTasks.filter { it.id !in queuedTaskIds }.ifEmpty { freshPromptTasks }
-                val newQueue = if (candidates.isEmpty()) {
-                    taskQueue.filterNot { it.task.id == taskId }
-                } else {
-                    val replacement = chooseWeightedTask(
-                        tasks = candidates,
-                        activeCategoryOrder = activeCategoryOrder,
-                        previousTaskId = taskId
-                    )
-                    taskQueue.map { if (it.task.id == taskId) TaskStackEntry(replacement) else it }
-                }
-                persistTaskQueue(newQueue)
-                showingReferralMatrixFor = null
-            }.onFailure { error ->
-                referralErrorMessage = error.message ?: "Couldn't reach the Web App - check the URL in Settings and your connection."
-            }
-        }
     }
 
     fun persistStreak(newStreak: Int) {
@@ -466,8 +431,13 @@ fun MicroTaskingApp(
     }
 
     fun runSheetImport(url: String) {
+        if (isImportingSheet) {
+            resyncPending = true
+            return
+        }
         isImportingSheet = true
         sheetImportMessage = null
+        referredDuringSync.clear()
         coroutineScope.launch {
             val result = withContext(Dispatchers.IO) {
                 importExternalTasksFromSheet(url)
@@ -499,7 +469,7 @@ fun MicroTaskingApp(
                         WebAppClient.getReferredRowKeys(savedWebAppUrl)
                     }
                     referredKeysResult.onSuccess { referredKeys ->
-                        savedManagedTasks = refreshReferralState(savedManagedTasks, referredKeys)
+                        savedManagedTasks = refreshReferralState(savedManagedTasks, referredKeys + referredDuringSync)
                     }
                 }
                 onManagedTasksSaved(savedManagedTasks)
@@ -524,7 +494,71 @@ fun MicroTaskingApp(
                 sheetImportMessage = "Couldn't read any tabs from this Sheet. Check the URL and that sharing is " +
                     "\"Anyone with the link can view\"."
             }
+            if (resyncPending) {
+                resyncPending = false
+                runSheetImport(savedSheetUrl)
+            }
         }
+    }
+
+    /**
+     * "Refer to ActiveTasks" (see SPEC.md "Task referral to ActiveTasks"): writes importance/urgency to the
+     * task's Sheet row via the Apps Script Web App, and on success stamps ManagedTask.referredAt
+     * locally right away (not waiting on the next sync) and removes the task from the queue with
+     * a replacement backfilled in its slot - a neutral outcome, same as Substitute, whether or not
+     * the task had already been Started. A sync then runs so the Sheet's view is re-read straight
+     * after the write.
+     */
+    fun submitReferral(taskId: String, importance: Double, urgency: Double) {
+        val task = taskQueue.find { it.task.id == taskId }?.task ?: return
+        referralInFlightTaskId = taskId
+        referralErrorMessage = null
+        coroutineScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                WebAppClient.setPriority(savedWebAppUrl, task.category, task.description, importance, urgency)
+            }
+            referralInFlightTaskId = null
+            result.onSuccess {
+                DiagnosticLog.log(context, "REFERRED", "task=$taskId category=${task.category} importance=$importance urgency=$urgency")
+                val updatedTasks = savedManagedTasks.map {
+                    if (it.id == taskId) it.copy(referredAt = System.currentTimeMillis()) else it
+                }
+                persistManagedTasks(updatedTasks)
+                val freshPromptTasks = eligiblePromptTasks(updatedTasks, savedUserTasks, savedCategories)
+                val queuedTaskIds = taskQueue.map { it.task.id }.toSet()
+                val candidates = freshPromptTasks.filter { it.id !in queuedTaskIds }.ifEmpty { freshPromptTasks }
+                val newQueue = if (candidates.isEmpty()) {
+                    taskQueue.filterNot { it.task.id == taskId }
+                } else {
+                    val replacement = chooseWeightedTask(
+                        tasks = candidates,
+                        activeCategoryOrder = activeCategoryOrder,
+                        previousTaskId = taskId
+                    )
+                    taskQueue.map { if (it.task.id == taskId) TaskStackEntry(replacement) else it }
+                }
+                persistTaskQueue(newQueue)
+                showingReferralMatrixFor = null
+                referredDuringSync += WebAppClient.rowKey(task.category, task.description)
+                if (savedSheetUrl.isNotBlank()) runSheetImport(savedSheetUrl)
+            }.onFailure { error ->
+                referralErrorMessage = error.message ?: "Couldn't reach the Web App - check the URL in Settings and your connection."
+            }
+        }
+    }
+
+    // Sync on every foreground entry - a cold launch, or coming back from ActiveTasks after it
+    // completed or released a row - so the task pool never waits on a manual "Update Tasks".
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val latestSyncOnStart by rememberUpdatedState {
+        if (savedSheetUrl.isNotBlank()) runSheetImport(savedSheetUrl)
+    }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_START) latestSyncOnStart()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     LaunchedEffect(

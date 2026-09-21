@@ -228,8 +228,13 @@ deliberate — just do the task immediately.
   `temporarilyUnavailable`) are carried over. Editing a description in the sheet changes its
   identity, so it reads as remove-old + add-new. (`MainActivity.parseExternalTaskCsv` /
   `TaskPool.mergeImportedManagedTasks`.)
-- **Sync cadence**: manual "Refresh now" always available, plus periodic background sync
-  (interval TBD, e.g. daily) once a source is registered.
+- **Sync cadence**: manual "Refresh now" always available. Both apps also sync automatically
+  every time they come to the foreground (a cold launch, or switching back from the other app)
+  and immediately after they change a row: MicroTasking after a referral, ActiveTasks after
+  Complete (for now) / Fully complete. A trigger that fires while a sync is already running
+  queues exactly one more sync behind it (the running one was fetched before the change), and the
+  change is protected from that stale result meanwhile (MicroTasking keeps the row referred;
+  ActiveTasks doesn't re-add the completed item). Periodic background sync is still TBD.
 - **Guardrails**: HTTPS-only, timeout + response-size cap on fetches, CSV parsed as plain data
   only (never rendered/executed as HTML).
 
@@ -429,8 +434,8 @@ calls. Therefore:
   interim `custom-` copy and no duplicate after the sync. For ActiveTasks the inserted item carries the
   priority it was created with.
 - **`TaskDelivery.tick` never calls the network** (unchanged). Reads happen at existing sync
-  boundaries (manual refresh + periodic background sync); writes happen only on an explicit user
-  action.
+  boundaries (manual refresh, foreground entry, right after a row change - see "Sync cadence");
+  writes happen only on an explicit user action.
 
 ### Adding tasks from the phone (My Tasks)
 
