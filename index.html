@@ -120,13 +120,22 @@
     max-width: 220px;
     height: auto;
   }
-  /* qrcodejs drops a <canvas> (or a <table> fallback) straight into #sheetQr; center whichever. */
-  #sheetQr {
+  /* qrcodejs drops a <canvas> (or a <table> fallback) straight into #sheetQr / #webAppQr; center whichever. */
+  #sheetQr, #webAppQr {
     display: flex;
     justify-content: center;
   }
-  #sheetQr table {
+  #sheetQr table, #webAppQr table {
     margin: 0 auto;
+  }
+  .setup-part {
+    margin-top: 1.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border, rgba(127, 127, 127, 0.3));
+  }
+  .setup-part h3 {
+    margin: 0 0 0.5rem;
+    font-size: 1.05rem;
   }
   .qr-row {
     display: flex;
@@ -233,11 +242,11 @@
           </div>
             <div class="qr-container">
             <div class="qr-label">two-apps</div>
-            <img src="qr-0.1.8-69.png" alt="MicroTasking APK QR Code (v0.1.8-69)">
+            <img src="qr-0.1.8-70.png" alt="MicroTasking APK QR Code (v0.1.8-70)">
             <br>
-            <a href="https://github.com/vemcg/MicroTasking/releases/download/v0.1.8-69/MicroTasking-v0.1.8-69.apk" class="btn" target="_blank" rel="noopener">Download MicroTasking APK (v0.1.8-69)</a>
+            <a href="https://github.com/vemcg/MicroTasking/releases/download/v0.1.8-70/MicroTasking-v0.1.8-70.apk" class="btn" target="_blank" rel="noopener">Download MicroTasking APK (v0.1.8-70)</a>
             <br>
-            <a href="https://github.com/vemcg/MicroTasking/releases/download/v0.1.8-69/MicroTasking-v0.1.8-69.apk" target="_blank" rel="noopener">Open the download again</a>
+            <a href="https://github.com/vemcg/MicroTasking/releases/download/v0.1.8-70/MicroTasking-v0.1.8-70.apk" target="_blank" rel="noopener">Open the download again</a>
           </div>
           </div>
           <p class="qr-guidance"><strong>Which one to use:</strong> Install from the <strong>Stable Release</strong> on the left &mdash; that is the build you should download and run. The <strong>two-apps</strong> development build on the right is an in-progress branch, published for testing only. You are welcome to try it, but it may be unstable, may fail to install or launch, and carries no guarantee that it works at all.</p>
@@ -257,37 +266,44 @@
     </section>
 
     <!-- STEP 3 -->
-    <section class="step">
+    <section class="step" id="setup">
       <div class="step-header">
         <div class="step-num">3</div>
-        <div class="step-title">Generate Your Setup QR Code</div>
+        <div class="step-title">Generate Your Setup QR Codes</div>
       </div>
-      <p>Instead of typing long URLs on your phone keyboard, generate a QR code right here. Fill in either box or both &mdash; each one is enough on its own:</p>
-      <ol>
-        <li>
-          <strong>Sheet URL:</strong> In your copied Google Sheet, make sure sharing is set to <strong>"Anyone with the link can view"</strong> (tap <strong>Share &rarr; Anyone with the link</strong>). Then copy the Sheet URL from your browser bar and paste the whole thing into the first box &mdash; <code>#gid=</code> and <code>?usp=</code> junk and all. It's trimmed down to just the sheet ID before the QR code is made.
-        </li>
-        <li>
-          <strong>Web App URL</strong> (for the <strong>&rarr;</strong> button that refers a task to the <strong>ActiveTasks</strong> companion app): this is <em>not</em> the address of the Apps Script editor tab. Get it by deploying the script from your Sheet:
-          <ol>
-            <li>In your Sheet, open <strong>Extensions &rarr; Apps Script</strong>.</li>
-            <li>Click <strong>Deploy &rarr; New deployment</strong> (or <strong>Manage deployments</strong> if you already deployed it).</li>
-            <li>Click the gear next to "Select type" and choose <strong>Web app</strong>. Set <strong>Execute as: Me</strong> and <strong>Who has access: Anyone</strong>, then click <strong>Deploy</strong> (approve the permissions prompt the first time).</li>
-            <li>Copy the <strong>Web app URL</strong> it shows &mdash; it starts with <code>https://script.google.com/macros/s/</code> and ends in <code>/exec</code> &mdash; and paste it into the second box.</li>
-          </ol>
-        </li>
-      </ol>
-      <div class="input-group">
-        <input type="url" id="sheetUrl" placeholder="Google Sheet URL: https://docs.google.com/spreadsheets/d/your-sheet-id/edit..." oninput="generateSheetQr()" onfocus="this.select()">
+      <p>Instead of typing long URLs on your phone keyboard, generate QR codes right here. There are <strong>two separate codes</strong> &mdash; one for your Sheet, one for the Web App URL &mdash; and the same two work in <strong>both</strong> MicroTasking and the <strong>ActiveTasks</strong> companion app. You scan each one on its own; scanning one never replaces what the other one set.</p>
+
+      <div class="setup-part">
+        <h3>A. Sheet QR code</h3>
+        <p>In your copied Google Sheet, make sure sharing is set to <strong>"Anyone with the link can view"</strong> (tap <strong>Share &rarr; Anyone with the link</strong>). Then copy the Sheet URL from your browser bar and paste the whole thing below &mdash; <code>#gid=</code> and <code>?usp=</code> junk and all. It's trimmed down to just the sheet ID before the QR code is made.</p>
+        <div class="input-group">
+          <input type="url" id="sheetUrl" placeholder="Google Sheet URL: https://docs.google.com/spreadsheets/d/your-sheet-id/edit..." oninput="generateSheetQr()" onfocus="this.select()">
+        </div>
+        <div class="qr-container" id="sheetQrContainer" style="display:none;">
+          <p style="margin-bottom: 0.5rem; font-weight: 600; color: var(--accent);">Your Sheet QR Code:</p>
+          <div id="sheetQr"></div>
+          <div class="qr-meta" id="sheetQrMeta"></div>
+        </div>
       </div>
-      <div class="input-group">
-        <input type="url" id="webAppUrl" placeholder="Apps Script Web App URL: https://script.google.com/macros/s/.../exec" oninput="generateSheetQr()" onfocus="this.select()">
-        <div class="qr-meta" id="webAppUrlProblem" style="color: #fca5a5;"></div>
-      </div>
-      <div class="qr-container" id="sheetQrContainer" style="display:none;">
-        <p style="margin-bottom: 0.5rem; font-weight: 600; color: var(--accent);">Your Setup QR Code:</p>
-        <div id="sheetQr"></div>
-        <div class="qr-meta" id="sheetQrMeta"></div>
+
+      <div class="setup-part">
+        <h3>B. Web App QR code <span style="font-weight: 400;">(optional &mdash; only for handing tasks between MicroTasking and ActiveTasks)</span></h3>
+        <p>This is the address that lets the two apps write back to your Sheet (the <strong>&rarr;</strong> button that refers a task to ActiveTasks, and ActiveTasks' Complete actions). It is <em>not</em> the address of the Apps Script editor tab. Get it by deploying the script from your Sheet, once, on a computer:</p>
+        <ol>
+          <li>In your Sheet, open <strong>Extensions &rarr; Apps Script</strong>.</li>
+          <li>Click <strong>Deploy &rarr; New deployment</strong> (or <strong>Manage deployments</strong> if you already deployed it).</li>
+          <li>Click the gear next to "Select type" and choose <strong>Web app</strong>. Set <strong>Execute as: Me</strong> and <strong>Who has access: Anyone</strong>, then click <strong>Deploy</strong> (approve the permissions prompt the first time).</li>
+          <li>Copy the <strong>Web app URL</strong> it shows &mdash; it starts with <code>https://script.google.com/macros/s/</code> and ends in <code>/exec</code> &mdash; and paste it below.</li>
+        </ol>
+        <div class="input-group">
+          <input type="url" id="webAppUrl" placeholder="Apps Script Web App URL: https://script.google.com/macros/s/.../exec" oninput="generateWebAppQr()" onfocus="this.select()">
+          <div class="qr-meta" id="webAppUrlProblem" style="color: #fca5a5;"></div>
+        </div>
+        <div class="qr-container" id="webAppQrContainer" style="display:none;">
+          <p style="margin-bottom: 0.5rem; font-weight: 600; color: var(--accent);">Your Web App QR Code:</p>
+          <div id="webAppQr"></div>
+          <div class="qr-meta" id="webAppQrMeta"></div>
+        </div>
       </div>
     </section>
 
@@ -300,10 +316,11 @@
       <ol>
         <li>Open the <strong>MicroTasking</strong> app on your Android phone.</li>
         <li>Tap the <strong>Settings (gear icon)</strong> in the top corner.</li>
-        <li>Select <strong>Import External Task Pool</strong>.</li>
-        <li>Tap <strong>Scan QR Code</strong> and scan the QR code generated in Step 3 above.</li>
+        <li>Open the <strong>Google Sheet Connection</strong> section.</li>
+        <li>Tap <strong>Scan Sheet QR Code</strong> and scan the <strong>Sheet QR code</strong> from Step 3. MicroTasking will sync your categories and tasks.</li>
+        <li>If you made a Web App QR code, tap <strong>Scan Web App QR Code</strong> and scan that one. It just registers the Web App URL and leaves your tasks as they are.</li>
       </ol>
-      <p style="color: var(--accent); font-weight: 600; margin-top: 0.5rem;">You're all set! MicroTasking will now automatically sync your categories and tasks (and register the Web App URL too, if you filled that box in). A code made from the Web App URL alone just registers that URL and leaves your tasks as they are.</p>
+      <p style="color: var(--accent); font-weight: 600; margin-top: 0.5rem;">You're all set! Using ActiveTasks too? Its Settings has the same <strong>Google Sheet Connection</strong> section &mdash; scan the same two codes from Step 3 there; there's no need to generate them again.</p>
     </section>
   </main>
 
@@ -318,13 +335,22 @@
       return m ? m[1] : null;
     }
 
-    // MicroTasking's QR scanner just reads the raw scanned text - there's no custom URI scheme.
-    // The payload is plain text, one URL per line: the sheet URL and/or the Web App URL, in that
-    // order. The app tells them apart by what each line looks like (script.google.com = Web App;
-    // see parseSetupQr in ReferralBridge.kt), so a code with just one of the two works too, and a
-    // plain single-line sheet QR (old codes) keeps working exactly as before.
-    function buildQrPayload(sheetUrl, webAppUrl) {
-      return [sheetUrl, webAppUrl].filter(Boolean).join('\n');
+    // The apps' QR scanners just read the raw scanned text - there's no custom URI scheme. There
+    // are two separate codes, each a single line: the sheet URL, or the Web App URL. Each app tells
+    // them apart by what the line looks like (script.google.com = Web App; see parseSetupQr in
+    // ReferralBridge.kt) and only updates the setting that line belongs to, so scanning one code
+    // never overwrites what the other set. (Older two-line codes still parse the same way.)
+    function drawQr(container, qrDiv, text) {
+      qrDiv.innerHTML = '';
+      container.style.display = 'block';
+      new QRCode(qrDiv, {
+        text: text,
+        width: 200,
+        height: 200,
+        colorDark : "#000000",
+        colorLight : "#ffffff",
+        correctLevel : QRCode.CorrectLevel.M
+      });
     }
 
     // A Web App URL is https://script.google.com/macros/s/<id>/exec. The commonest mix-up is
@@ -347,43 +373,41 @@
 
     function generateSheetQr() {
       const container = document.getElementById('sheetQrContainer');
-      const qrDiv = document.getElementById('sheetQr');
       const meta = document.getElementById('sheetQrMeta');
-      const problemDiv = document.getElementById('webAppUrlProblem');
       const id = sheetIdFrom(document.getElementById('sheetUrl').value);
-      const webAppUrl = document.getElementById('webAppUrl').value.trim();
-      const webAppProblem = webAppUrlProblem(webAppUrl);
-      const validWebAppUrl = webAppUrl && !webAppProblem ? webAppUrl : '';
       const sheetUrl = id ? 'https://docs.google.com/spreadsheets/d/' + id : '';
 
-      problemDiv.textContent = webAppProblem || '';
       if (sheetUrl) {
         localStorage.setItem(SHEET_URL_STORAGE_KEY, sheetUrl);
+        drawQr(container, document.getElementById('sheetQr'), sheetUrl);
+        meta.textContent = 'Generated from sheet ' + id + ' at ' + new Date().toLocaleString();
       } else {
         localStorage.removeItem(SHEET_URL_STORAGE_KEY);
+        document.getElementById('sheetQr').innerHTML = '';
+        container.style.display = 'none';
+        meta.textContent = '';
       }
+    }
+
+    function generateWebAppQr() {
+      const container = document.getElementById('webAppQrContainer');
+      const meta = document.getElementById('webAppQrMeta');
+      const problemDiv = document.getElementById('webAppUrlProblem');
+      const webAppUrl = document.getElementById('webAppUrl').value.trim();
+      const problem = webAppUrlProblem(webAppUrl);
+
+      problemDiv.textContent = problem || '';
       if (webAppUrl) {
         localStorage.setItem(WEBAPP_URL_STORAGE_KEY, webAppUrl);
       } else {
         localStorage.removeItem(WEBAPP_URL_STORAGE_KEY);
       }
 
-      qrDiv.innerHTML = '';
-      if (sheetUrl || validWebAppUrl) {
-        container.style.display = 'block';
-        new QRCode(qrDiv, {
-          text: buildQrPayload(sheetUrl, validWebAppUrl),
-          width: 200,
-          height: 200,
-          colorDark : "#000000",
-          colorLight : "#ffffff",
-          correctLevel : QRCode.CorrectLevel.M
-        });
-        const parts = [];
-        if (sheetUrl) parts.push('sheet ' + id);
-        if (validWebAppUrl) parts.push('Web App URL');
-        meta.textContent = 'Generated from ' + parts.join(' + ') + ' at ' + new Date().toLocaleString();
+      if (webAppUrl && !problem) {
+        drawQr(container, document.getElementById('webAppQr'), webAppUrl);
+        meta.textContent = 'Generated from the Web App URL at ' + new Date().toLocaleString();
       } else {
+        document.getElementById('webAppQr').innerHTML = '';
         container.style.display = 'none';
         meta.textContent = '';
       }
@@ -392,14 +416,13 @@
     (function restoreSavedUrls() {
       const saved = localStorage.getItem(SHEET_URL_STORAGE_KEY);
       const savedWebApp = localStorage.getItem(WEBAPP_URL_STORAGE_KEY);
-      if (savedWebApp) {
-        document.getElementById('webAppUrl').value = savedWebApp;
-      }
       if (saved) {
         document.getElementById('sheetUrl').value = saved;
-      }
-      if (saved || savedWebApp) {
         generateSheetQr();
+      }
+      if (savedWebApp) {
+        document.getElementById('webAppUrl').value = savedWebApp;
+        generateWebAppQr();
       }
     })();
   </script>
