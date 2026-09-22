@@ -655,11 +655,22 @@ function addRowCheckbox_(sheet, row) {
  * referral to ActiveTasks": rows shift under onSheetEdit_'s delete-row-on-empty-description behavior,
  * so a cached row index would eventually point at the wrong row.
  *
+ * DEV (sheet-surrogate-keys), additive and backward-compatible: doGet now also returns each row's
+ * `taskId`/`categoryId` (see ensureTaskIds_/ensureCategoryId_ above), and doPost accepts an
+ * optional `taskId` that, when present, is used INSTEAD of category+description to find the row -
+ * see findRowByTaskId_. Neither app sends `taskId` yet, so every call today still takes the
+ * legacy (category, description) path unchanged; this only makes the id-based path available for
+ * whenever the apps are updated to use it.
+ *
  * See MicroTasking's SPEC.md "Sheet connection & API (Apps Script Web App)" and ActiveTasks's SPEC.md
  * "Referral bridge" for the two apps' side of this contract.
  */
 
-/** GET ?action=getPriorities -> {"ok":true,"rows":[{"category","description","importance","urgency"}, ...]} */
+/**
+ * GET ?action=getPriorities -> {"ok":true,"rows":[{"category","categoryId","description","taskId",
+ * "importance","urgency"}, ...]}. `taskId`/`categoryId` are null on a row/tab that predates
+ * ensureTaskIds_/ensureCategoryId_ and hasn't been repaired yet (DEV, sheet-surrogate-keys).
+ */
 function doGet(e) {
   var action = e && e.parameter && e.parameter.action;
   if (action !== "getPriorities") {
@@ -672,16 +683,22 @@ function doGet(e) {
       if (sheet.getName() === "README") return;
       var lastRow = sheet.getLastRow();
       if (lastRow < 2) return;
-      var values = sheet.getRange(2, 2, lastRow - 1, 4).getValues(); // B..E
+      // B..F, not just B..E, so taskId (F) rides along with the existing importance/urgency read
+      // in the same round trip (DEV, sheet-surrogate-keys).
+      var values = sheet.getRange(2, 2, lastRow - 1, 5).getValues(); // B..F
+      var categoryId = categoryId_(sheet);
       for (var i = 0; i < values.length; i++) {
         var description = String(values[i][0]).trim();
         var importance = values[i][2];
         var urgency = values[i][3];
+        var taskId = String(values[i][4]).trim();
         if (!description) continue;
         if (importance === "" && urgency === "") continue;
         rows.push({
           category: sheet.getName(),
+          categoryId: categoryId,
           description: description,
+          taskId: taskId || null,
           importance: importance === "" ? 0 : Number(importance),
           urgency: urgency === "" ? 0 : Number(urgency)
         });
@@ -694,19 +711,34 @@ function doGet(e) {
 }
 
 /**
- * POST body (JSON): {"action": "setPriority"|"clearPriority"|"deleteRow", "category", "description", ...}
+ * POST body (JSON): {"action": "setPriority"|"clearPriority"|"deleteRow", "category", "description",
+ * "taskId"?, ...}
  *  - setPriority: also "importance" (number 0-1), "urgency" (number 0-1). Written by MicroTasking
  *    on referral, and by ActiveTasks on re-triage.
  *  - clearPriority: blanks D/E for that row. ActiveTasks's "Complete (for now)".
  *  - deleteRow: removes the row entirely. ActiveTasks's "Fully complete".
+ *  - "taskId" (DEV, sheet-surrogate-keys): optional. When present, the row is found by
+ *    findRowByTaskId_ (scans every tab) and "category"/"description" are ignored entirely for
+ *    lookup purposes - so a rename or a move to a different tab since the caller last synced
+ *    doesn't matter. Omitted (every caller today), it's the unchanged legacy path:
+ *    findRowByDescription_ within the named tab.
  */
 function doPost(e) {
   try {
     var body = JSON.parse(e.postData.contents);
-    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(body.category);
-    if (!sheet) return jsonResponse_({ ok: false, error: "No tab named \"" + body.category + "\"" });
-    var row = findRowByDescription_(sheet, body.description);
-    if (row === -1) return jsonResponse_({ ok: false, error: "No row matching that description" });
+    var sheet, row;
+
+    if (body.taskId) {
+      var located = findRowByTaskId_(String(body.taskId).trim());
+      if (!located) return jsonResponse_({ ok: false, error: "No row with that task id" });
+      sheet = located.sheet;
+      row = located.row;
+    } else {
+      sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(body.category);
+      if (!sheet) return jsonResponse_({ ok: false, error: "No tab named \"" + body.category + "\"" });
+      row = findRowByDescription_(sheet, body.description);
+      if (row === -1) return jsonResponse_({ ok: false, error: "No row matching that description" });
+    }
 
     switch (body.action) {
       case "setPriority":
@@ -736,6 +768,27 @@ function findRowByDescription_(sheet, description) {
     if (String(values[i][0]).trim() === description) return i + 2;
   }
   return -1;
+}
+
+/**
+ * DEV (sheet-surrogate-keys): {sheet, row} (1-based) for the row whose Task ID column (F) matches
+ * `taskId`, or null. Scans every non-README tab, not just one named tab - the whole point of a
+ * task id is that it's still findable even if the row has moved to a different tab, or that tab
+ * has been renamed, since the caller last synced.
+ */
+function findRowByTaskId_(taskId) {
+  var sheets = SpreadsheetApp.getActiveSpreadsheet().getSheets();
+  for (var s = 0; s < sheets.length; s++) {
+    var sheet = sheets[s];
+    if (sheet.getName() === "README") continue;
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 2) continue;
+    var ids = sheet.getRange(2, 6, lastRow - 1, 1).getValues();
+    for (var i = 0; i < ids.length; i++) {
+      if (String(ids[i][0]).trim() === taskId) return { sheet: sheet, row: i + 2 };
+    }
+  }
+  return null;
 }
 
 function jsonResponse_(obj) {
