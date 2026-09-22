@@ -465,6 +465,7 @@ function onOpen() {
     .addItem("Rebuild everything from template", "setupMicroTaskingSheet")
     .addSeparator()
     .addItem("Dev: List task/category IDs", "listIds_")
+    .addItem("Dev: Self-test taskId lookup", "selfTestTaskIdLookup_")
     .addToUi();
 }
 
@@ -492,6 +493,105 @@ function repairSheet_() {
   ss.toast(
     installed ? "Headers checked; edit triggers installed." : "Headers checked; edit triggers already set.",
     "MicroTasking", 5
+  );
+  // DEV (sheet-surrogate-keys): prove the taskId-based doPost path actually works every time
+  // headers/ids get repaired, without a separate manual step.
+  selfTestTaskIdLookup_();
+}
+
+/** DEV (sheet-surrogate-keys): {sheet, row, taskId} for the first task row found with a non-blank id, or null. */
+function findAnyTaskIdRow_() {
+  var sheets = SpreadsheetApp.getActiveSpreadsheet().getSheets();
+  for (var s = 0; s < sheets.length; s++) {
+    var sheet = sheets[s];
+    if (sheet.getName() === "README") continue;
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 2) continue;
+    var ids = sheet.getRange(2, 6, lastRow - 1, 1).getValues();
+    for (var i = 0; i < ids.length; i++) {
+      var id = String(ids[i][0]).trim();
+      if (id) return { sheet: sheet, row: i + 2, taskId: id };
+    }
+  }
+  return null;
+}
+
+/**
+ * DEV (sheet-surrogate-keys). Proves the taskId-based doPost path (findRowByTaskId_) actually
+ * works, entirely in-process - no deployment, no curl, no HTTP round trip. doPost is just a
+ * regular function; calling it directly with a synthetic {postData: {contents: ...}} object,
+ * exactly the shape a real Web App request arrives in, exercises the real function body, not a
+ * reimplementation. Runs automatically at the end of repairSheet_, and separately from the "Dev:
+ * Self-test taskId lookup" menu item.
+ *
+ * Non-destructive: picks one existing task row, remembers its current importance/urgency exactly
+ * (blank or set - a genuinely already-referred row must come back exactly as it was, not wiped),
+ * writes test values via doPost using that row's taskId alongside a DELIBERATELY WRONG
+ * category/description - this is the actual property being proven, that taskId alone resolves
+ * the row even when the category/description passed alongside it is stale or wrong, which is
+ * exactly what a rename leaves you with - verifies the write landed on that exact physical row,
+ * then restores the original values. Also checks that a made-up taskId is correctly rejected
+ * rather than silently matching something.
+ */
+function selfTestTaskIdLookup_() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var testRow = findAnyTaskIdRow_();
+  if (!testRow) {
+    ss.toast(
+      "Self-test skipped: no task row with an id yet to test against.",
+      "MicroTasking (dev) self-test", 6
+    );
+    return;
+  }
+
+  var sheet = testRow.sheet;
+  var row = testRow.row;
+  var taskId = testRow.taskId;
+  var original = sheet.getRange(row, 4, 1, 2).getValues()[0]; // [importance, urgency], "" if blank
+  var wasBlank = original[0] === "" && original[1] === "";
+  var results = [];
+
+  function callDoPost(body) {
+    return JSON.parse(doPost({ postData: { contents: JSON.stringify(body) } }).getContent());
+  }
+
+  // 1. Write by taskId, with a deliberately wrong category/description alongside it - the row
+  // must still be found correctly, since taskId is what a rename can't disturb.
+  var writeResponse = callDoPost({
+    action: "setPriority",
+    taskId: taskId,
+    category: "__self-test-wrong-category__",
+    description: "__self-test-wrong-description__",
+    importance: 0.42,
+    urgency: 0.17
+  });
+  var afterWrite = sheet.getRange(row, 4, 1, 2).getValues()[0];
+  var writeOk = writeResponse.ok && Math.abs(afterWrite[0] - 0.42) < 1e-9 && Math.abs(afterWrite[1] - 0.17) < 1e-9;
+  results.push((writeOk ? "PASS" : "FAIL") + " - write by taskId, wrong category/description supplied too");
+
+  // 2. Restore the row's original values exactly, whatever they were - never leaves real data
+  // changed, whether the row was blank or already genuinely referred.
+  if (wasBlank) {
+    sheet.getRange(row, 4, 1, 2).setValues([["", ""]]);
+  } else {
+    callDoPost({ action: "setPriority", taskId: taskId, importance: Number(original[0]), urgency: Number(original[1]) });
+  }
+  var afterRestore = sheet.getRange(row, 4, 1, 2).getValues()[0];
+  var restoreOk = wasBlank
+    ? (afterRestore[0] === "" && afterRestore[1] === "")
+    : (Math.abs(afterRestore[0] - Number(original[0])) < 1e-9 && Math.abs(afterRestore[1] - Number(original[1])) < 1e-9);
+  results.push((restoreOk ? "PASS" : "FAIL") + " - original values restored");
+
+  // 3. A made-up taskId should fail cleanly, not silently match something.
+  var bogusResponse = callDoPost({ action: "setPriority", taskId: "self-test-bogus-id-does-not-exist", importance: 0.5, urgency: 0.5 });
+  results.push((!bogusResponse.ok ? "PASS" : "FAIL") + " - bogus taskId correctly rejected");
+
+  var allPass = results.every(function (r) { return r.indexOf("PASS") === 0; });
+  Logger.log("selfTestTaskIdLookup_ (" + sheet.getName() + " row " + row + "):\n" + results.join("\n"));
+  ss.toast(
+    (allPass ? "All 3 checks passed" : "SOME CHECKS FAILED - see Executions log") +
+      ". Tested against " + sheet.getName() + " row " + row + ".",
+    "MicroTasking (dev) self-test", 8
   );
 }
 
