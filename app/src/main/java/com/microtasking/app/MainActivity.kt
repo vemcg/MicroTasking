@@ -43,7 +43,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -968,7 +967,7 @@ fun TaskPromptScreen(
 
         val countdownText = when {
             queueFullFlash -> "Queue full — finish one first"
-            vacationMode -> "On vacation — uncheck it in Settings to resume"
+            vacationMode -> "Hard paused — uncheck it in Settings to resume"
             promptsPerDay <= 0 -> "Automatic prompts off — set \"prompts per day\""
             !backgroundPromptsRunning && withinWindow -> "Paused — tap for a task now"
             !withinWindow && nextDispatchEpoch != null ->
@@ -994,15 +993,15 @@ fun TaskPromptScreen(
 
 /**
  * The "Refer to ActiveTasks" hand-off button (see SPEC.md "Task referral to ActiveTasks"): a plain filled
- * Button, so it matches Start/Substitute/Done/Abandon, holding a white arrow pointing toward the
- * other app. Sits in the middle of the Ready (Start / Substitute) and Started (Done / Abandon)
+ * Button, so it matches Start/Substitute/Done/Abandon, labeled "Activate" rather than an unlabeled
+ * arrow icon. Sits in the middle of the Ready (Start / Substitute) and Started (Done / Abandon)
  * rows, which are exactly the two states where referral is available; referring a Started task
  * discards its timer.
  */
 @Composable
 private fun RowScope.ReferButton(onClick: () -> Unit) {
     Button(modifier = Modifier.weight(1f), onClick = onClick) {
-        Icon(Icons.Filled.ArrowForward, contentDescription = "Refer to ActiveTasks")
+        Text("Activate")
     }
 }
 
@@ -1419,12 +1418,8 @@ fun SettingsScreen(
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         sectionHeader("Prompting Schedule")
                         if (openSection == "Prompting Schedule") {
-                            Button(
-                                modifier = Modifier.fillMaxWidth(),
-                                onClick = { onBackgroundPromptsChanged(!backgroundPromptsRunning) }
-                            ) {
-                                Text(if (backgroundPromptsRunning) "Pause task queue" else "Resume task queue")
-                            }
+                            // Pause/Resume lives on the main task-list screen (and the score
+                            // screen) - a second copy here was redundant, so it's not repeated.
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically
@@ -1433,7 +1428,7 @@ fun SettingsScreen(
                                     checked = vacationMode,
                                     onCheckedChange = onVacationModeChanged
                                 )
-                                Text("On vacation — stop everything until I uncheck this")
+                                Text("Hard pause — stop everything until I uncheck this")
                             }
                             Text(
                                 "Overrides Pause/Resume and the active window entirely - while checked, nothing " +
