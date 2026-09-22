@@ -119,6 +119,51 @@ class TaskPoolTest {
         assertTrue(merged.single().neverSuggest)
     }
 
+    // DEV (sheet-surrogate-keys): the actual point of the exercise - a task's per-app flags and
+    // referral state now survive a Sheet description (or category text) rename, because identity
+    // is taskId-based instead of category+description text once the Sheet has one.
+
+    @Test
+    fun mergeImportedManagedTasks_taskIdKeepsFlagsAcrossADescriptionRename() {
+        val existing = listOf(
+            ManagedTask(
+                id = "external-uuid-123", description = "Wipe the counters", category = "Cleaning",
+                durationMinutes = 5, builtIn = false, neverSuggest = true, temporarilyUnavailable = true,
+                referredAt = 1_700_000_000_000L, taskId = "uuid-123"
+            )
+        )
+        // Re-sync after someone reworded the Sheet row by hand - same taskId, new description/id
+        // text would be identical either way here since the id is now built from taskId alone.
+        val imported = listOf(
+            ManagedTask(
+                id = "external-uuid-123", description = "Wipe down the kitchen counters", category = "Cleaning",
+                durationMinutes = 5, builtIn = false, taskId = "uuid-123"
+            )
+        )
+
+        val merged = mergeImportedManagedTasks(imported, existing)
+
+        val task = merged.single()
+        assertEquals("Wipe down the kitchen counters", task.description)
+        assertTrue("neverSuggest survives the rename", task.neverSuggest)
+        assertTrue("temporarilyUnavailable survives the rename", task.temporarilyUnavailable)
+        assertEquals("referredAt survives the rename", 1_700_000_000_000L, task.referredAt)
+    }
+
+    @Test
+    fun refreshReferralState_prefersTaskIdKeyOverTextKeyWhenPresent() {
+        // A stale category/description (as if read before a rename) would miss the legacy
+        // "category|description" key entirely - taskId-based matching doesn't care.
+        val task = builtInTasks.first().copy(
+            category = "Old Name", description = "Stale text", taskId = "uuid-123"
+        )
+        val referredKeys = setOf("uuid-123")
+
+        val result = refreshReferralState(listOf(task), referredKeys, now = 99L)
+
+        assertEquals(99L, result.single().referredAt)
+    }
+
     @Test
     fun refreshReferralState_stampsNewlyReferredTaskAndClearsUnreferredOne() {
         val referred = builtInTasks[0]

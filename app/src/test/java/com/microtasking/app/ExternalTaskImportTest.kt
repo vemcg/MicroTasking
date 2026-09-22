@@ -93,6 +93,48 @@ class ExternalTaskImportTest {
         assertEquals("external-Cleaning-Wipe the counters", first.id)
     }
 
+    // DEV (sheet-surrogate-keys): a "Task ID" column, matched by header text like Description/Link.
+
+    @Test
+    fun parseExternalTaskCsv_readsTaskIdColumnAndBuildsIdFromIt() {
+        val csv = """
+            TRUE,Description,Link,Task ID
+            TRUE,Wipe the counters,,uuid-123
+        """.trimIndent()
+
+        val task = parseExternalTaskCsv(csv, "Cleaning").single()
+
+        assertEquals("uuid-123", task.taskId)
+        assertEquals("external-uuid-123", task.id)
+    }
+
+    @Test
+    fun parseExternalTaskCsv_noTaskIdColumnFallsBackToLegacyTextId() {
+        val csv = """
+            TRUE,Description,Link
+            TRUE,Wipe the counters,
+        """.trimIndent()
+
+        val task = parseExternalTaskCsv(csv, "Cleaning").single()
+
+        assertEquals(null, task.taskId)
+        assertEquals("external-Cleaning-Wipe the counters", task.id)
+    }
+
+    @Test
+    fun parseExternalTaskCsv_idSurvivesADescriptionRenameWhenTaskIdIsPresent() {
+        val before = parseExternalTaskCsv(
+            "TRUE,Description,Link,Task ID\nTRUE,Wipe the counters,,uuid-123", "Cleaning"
+        ).single()
+        // Same task id, reworded description - simulates editing the Sheet row by hand.
+        val after = parseExternalTaskCsv(
+            "TRUE,Description,Link,Task ID\nTRUE,Wipe down the kitchen counters,,uuid-123", "Cleaning"
+        ).single()
+
+        assertEquals("the id is the same task before and after the rename", before.id, after.id)
+        assertEquals("Wipe down the kitchen counters", after.description)
+    }
+
     @Test
     fun parseExternalTaskCsv_skipsRowsWithNoDescription() {
         val csv = """

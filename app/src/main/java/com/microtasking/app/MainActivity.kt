@@ -514,7 +514,9 @@ fun MicroTaskingApp(
         referralErrorMessage = null
         coroutineScope.launch {
             val result = withContext(Dispatchers.IO) {
-                WebAppClient.setPriority(savedWebAppUrl, task.category, task.description, importance, urgency)
+                // DEV (sheet-surrogate-keys): pass task.taskId too, when this task has one, so the
+                // write is rename-proof the same way reads already are - see WebAppClient.setPriority.
+                WebAppClient.setPriority(savedWebAppUrl, task.category, task.description, importance, urgency, task.taskId)
             }
             referralInFlightTaskId = null
             result.onSuccess {
@@ -2034,6 +2036,14 @@ fun parseExternalTaskCsv(csvText: String, categoryName: String): List<ManagedTas
     val header = rows.first().map { it.lowercase() }
     val descriptionIndex = header.indexOfFirst { it.contains("description") }
     val linkIndex = header.indexOfFirst { it.contains("link") || it.contains("url") }
+    // DEV (sheet-surrogate-keys): matched by header text like description/link, so column
+    // reordering stays safe - see ensureTaskIds_ in populate_google_sheet.js. Hidden columns
+    // still ride along in the CSV/gviz export regardless of Sheets-UI hidden state (the same
+    // property Importance/Urgency deliberately avoid relying on, since those need to stay
+    // invisible even to someone inspecting the export - a task id isn't sensitive, so reading it
+    // straight off the CSV needs no Web App call). Absent (a sheet not yet repaired to have the
+    // column) just means every task on that tab falls back to the legacy text-based id below.
+    val taskIdIndex = header.indexOfFirst { it == "task id" || it == "taskid" }
     if (descriptionIndex == -1) return emptyList()
 
     val dataRows = rows.drop(1)
@@ -2050,18 +2060,22 @@ fun parseExternalTaskCsv(csvText: String, categoryName: String): List<ManagedTas
         if (description.isEmpty()) return@mapIndexedNotNull null
         val enabled = if (tabUsesCheckboxes) columnA[index] == "true" else true
         val link = row.getOrNull(linkIndex).orEmpty().trim()
+        val taskId = row.getOrNull(taskIdIndex).orEmpty().trim().ifEmpty { null }
         ManagedTask(
-            // Deterministic so a re-sync updates the same task (and keeps its in-app flags - see
-            // mergeImportedManagedTasks) instead of duplicating it. Editing a description in the
-            // sheet therefore reads as remove-old + add-new, which is the honest outcome.
-            id = "external-$categoryName-$description",
+            // DEV (sheet-surrogate-keys): taskId-based when the sheet has one - stable across a
+            // description edit, so a re-sync recognizes it as the same task (mergeImportedManagedTasks
+            // merges by id) and its in-app flags survive the rename instead of being lost. Falls
+            // back to the legacy text-based id for a sheet not yet repaired to have task ids -
+            // deterministic there too, but a description edit still reads as remove-old + add-new.
+            id = taskId?.let { "external-$it" } ?: "external-$categoryName-$description",
             description = description,
             category = categoryName,
             durationMinutes = 5,
             builtIn = false,
             enabled = enabled,
             temporarilyUnavailable = false,
-            neverSuggest = false
+            neverSuggest = false,
+            taskId = taskId
         )
     }
 }
