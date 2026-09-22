@@ -156,3 +156,13 @@ Next work session: make onboarding, import, the spreadsheet template, persistenc
      release workflow (`gh workflow run "Build & release APK" --ref <branch>`).
    - Out of scope for this item: renaming/deleting tabs through the API, editing an existing
      row's text through the API, an offline write queue, per-user sign-in (all noted in the SPEC).
+
+10. **Harden against user edits to the shared Sheet** — *not started, scoped 2026-09-22 at the
+    user's request: "make it very hard for user input to break either app."* Full write-up lives in
+    ActiveTasks's `PUNCH_LIST.md` item 4 (that side is where it currently bites - a renamed
+    description orphans a stuck, un-dismissable duplicate card there, and a renamed tab makes the
+    orphan permanently unreachable). Confirmed while scoping this: MicroTasking's own pool already
+    handles a description/tab rename cleanly (`mergeImportedManagedTasks` rebuilds from the current
+    import every sync, so a stale id is simply dropped, not orphaned) - nothing to fix here today,
+    but the real fix (a stable server-assigned row id instead of raw description text, item 9
+    above) is shared infrastructure, so keep both PUNCH_LISTs in sync as it's designed.
