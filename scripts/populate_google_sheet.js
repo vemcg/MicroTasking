@@ -34,7 +34,16 @@
  *
  * If "Running..." never ends: open Executions (clock icon, left sidebar) to see whether the run
  * actually finished or errored. onOpen / onSheetEdit_ / onGridChange_ / addRowCheckbox_ /
- * repairSheet_ are triggers or menu handlers - don't run them by hand.
+ * repairSheet_ / ensureTaskIds_ / ensureCategoryId_ are triggers or menu handlers - don't run
+ * them by hand.
+ *
+ * DEV BRANCH NOTE (sheet-surrogate-keys): this adds a persistent, random per-row "Task ID" (hidden
+ * column F) and a persistent per-tab "categoryId" (Sheet-level Developer Metadata, not a cell -
+ * see ensureCategoryId_) - see the exploration in chat: identity today is (tab name, description
+ * text), which breaks the moment either is edited by hand. Script-only so far: doGet/doPost, both
+ * apps, and the wire contract are untouched - this branch only generates and maintains the ids so
+ * they can be inspected/tested directly in a Sheet first (menu: "Dev: List task/category IDs").
+ * Not pushed to the shared template or any live deployment.
  *
  * MAINTAINER NOTE: this file is the source of truth and is pushed to the bound Apps Script
  * project of the shared template Sheet with `npm run push:sheet` (clasp). See .clasp.json.
@@ -343,6 +352,8 @@ function applyCategoryTabHeader_(sheet) {
   sheet.setColumnWidth(2, 500);
   sheet.setColumnWidth(3, 250);
   ensureReferralColumns_(sheet);
+  ensureTaskIds_(sheet);
+  ensureCategoryId_(sheet);
 }
 
 /**
@@ -375,6 +386,73 @@ function ensureReferralColumns_(sheet) {
 }
 
 /**
+ * DEV (sheet-surrogate-keys): adds/repairs a hidden, warning-protected "Task ID" column (F) - a
+ * random, content-independent token stamped once per row and never recomputed, so a task keeps
+ * its identity across a description rename. Unlike Importance/Urgency, nothing reads this column
+ * yet (doGet/doPost are untouched on this branch); it only exists so the id-generation and
+ * dedupe behavior below can be tested directly in a Sheet.
+ *
+ * Idempotent, and safe to re-run any time: a blank cell (new row, or a tab that predates this
+ * column) gets a fresh id; an id that turns out to be duplicated - the case this branch exists to
+ * test, since a whole-row copy/paste carries the hidden cell along with the visible ones - is
+ * re-minted on every row after the first that shares it, so two rows never end up meaning "the
+ * same task" by accident.
+ */
+function ensureTaskIds_(sheet) {
+  sheet.getRange("F1").setValue("Task ID");
+  sheet.getRange("F1").setFontWeight("bold").setHorizontalAlignment("center");
+  if (!sheet.isColumnHiddenByUser(6)) sheet.hideColumns(6);
+
+  var idRange = sheet.getRange("F2:F");
+  var alreadyProtected = sheet.getProtections(SpreadsheetApp.ProtectionType.RANGE).some(function (p) {
+    return p.getRange().getA1Notation() === idRange.getA1Notation();
+  });
+  if (!alreadyProtected) {
+    idRange.protect()
+      .setDescription("MicroTasking/ActiveTasks task identity - edit via the apps, not by hand")
+      .setWarningOnly(true);
+  }
+
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return;
+  var descriptions = sheet.getRange(2, 2, lastRow - 1, 1).getValues();
+  var ids = sheet.getRange(2, 6, lastRow - 1, 1).getValues();
+  var seen = {};
+  var changed = false;
+  for (var i = 0; i < ids.length; i++) {
+    if (String(descriptions[i][0]).trim().length === 0) continue; // no description yet - onSheetEdit_ stamps an id the moment one lands
+    var id = String(ids[i][0]).trim();
+    if (!id || Object.prototype.hasOwnProperty.call(seen, id)) {
+      id = Utilities.getUuid();
+      ids[i][0] = id;
+      changed = true;
+    }
+    seen[id] = true;
+  }
+  if (changed) sheet.getRange(2, 6, ids.length, 1).setValues(ids);
+}
+
+/**
+ * DEV (sheet-surrogate-keys): the TAB's own persistent id, as opposed to ensureTaskIds_'s per-row
+ * ids - stored as Sheet-level Developer Metadata rather than a cell. Metadata isn't shown
+ * anywhere in the Sheets UI and can't be pasted over, which fits "the tab's own identity" better
+ * than a cell would (row 1 of column F is already a literal header label, "Task ID", matching
+ * Description/Link/Importance/Urgency - a tab-level fact doesn't belong on that same row, and
+ * would be exactly as vulnerable to an accidental paste as the row ids above). Idempotent.
+ */
+function ensureCategoryId_(sheet) {
+  var existing = sheet.getDeveloperMetadata().filter(function (m) { return m.getKey() === "categoryId"; });
+  if (existing.length > 0) return;
+  sheet.addDeveloperMetadata("categoryId", Utilities.getUuid());
+}
+
+/** DEV (sheet-surrogate-keys): the tab's id from ensureCategoryId_, or null if not stamped yet. */
+function categoryId_(sheet) {
+  var entries = sheet.getDeveloperMetadata().filter(function (m) { return m.getKey() === "categoryId"; });
+  return entries.length > 0 ? entries[0].getValue() : null;
+}
+
+/**
  * Adds the "MicroTasking" menu. onOpen is a simple trigger, so this alone needs no authorization -
  * the menu items it points at do, the first time they run. This is the reliable entry point in a
  * *copy* of the template (installable triggers and prior authorization never survive File → Make
@@ -385,6 +463,8 @@ function onOpen() {
     .createMenu("MicroTasking")
     .addItem("Repair headers & triggers", "repairSheet_")
     .addItem("Rebuild everything from template", "setupMicroTaskingSheet")
+    .addSeparator()
+    .addItem("Dev: List task/category IDs", "listIds_")
     .addToUi();
 }
 
@@ -399,8 +479,11 @@ function repairSheet_() {
     if (sheet.getName() === "README") return;
     if (String(sheet.getRange("B1").getValue()).trim() === "Description") {
       // Header already present - still make sure a tab created before the referral feature
-      // existed gets upgraded with the Importance/Urgency columns.
+      // existed gets upgraded with the Importance/Urgency columns, and (DEV, sheet-surrogate-keys)
+      // before task ids existed gets those backfilled, with any copy/paste duplicate re-minted.
       ensureReferralColumns_(sheet);
+      ensureTaskIds_(sheet);
+      ensureCategoryId_(sheet);
       return;
     }
     applyCategoryTabHeader_(sheet);
@@ -409,6 +492,45 @@ function repairSheet_() {
   ss.toast(
     installed ? "Headers checked; edit triggers installed." : "Headers checked; edit triggers already set.",
     "MicroTasking", 5
+  );
+}
+
+/**
+ * DEV (sheet-surrogate-keys), menu item only - not part of the Web App contract. Dumps every
+ * tab's categoryId and each row's task id to the Executions log, and toasts a one-line summary
+ * including a duplicate count, so ensureTaskIds_/ensureCategoryId_ can actually be inspected -
+ * both are otherwise invisible (hidden column, Developer Metadata). Useful sequence to test the
+ * copy/paste case: run this, copy a whole row (right-click the row number -> Copy, not just the
+ * visible cells) into a blank row, run "Repair headers & triggers" (or just edit the sheet, since
+ * onSheetEdit_ should already have self-healed it), then run this again and confirm the
+ * duplicate count is still 0 and the pasted row's id differs from the row it was copied from.
+ */
+function listIds_() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var totalRows = 0;
+  var duplicates = 0;
+  ss.getSheets().forEach(function (sheet) {
+    if (sheet.getName() === "README") return;
+    Logger.log("=== " + sheet.getName() + " (categoryId=" + categoryId_(sheet) + ") ===");
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 2) return;
+    var descriptions = sheet.getRange(2, 2, lastRow - 1, 1).getValues();
+    var ids = sheet.getRange(2, 6, lastRow - 1, 1).getValues();
+    var seen = {};
+    for (var i = 0; i < ids.length; i++) {
+      var description = String(descriptions[i][0]).trim();
+      if (!description) continue;
+      var id = String(ids[i][0]).trim();
+      totalRows++;
+      if (id && Object.prototype.hasOwnProperty.call(seen, id)) duplicates++;
+      seen[id] = true;
+      Logger.log("  row " + (i + 2) + ": taskId=" + (id || "(blank!)") + "  " + description);
+    }
+  });
+  ss.toast(
+    totalRows + " task row(s) checked, " + duplicates + " duplicate id(s) found. Full detail in " +
+      "Executions (clock icon, left sidebar).",
+    "MicroTasking (dev)", 8
   );
 }
 
@@ -493,6 +615,17 @@ function onSheetEdit_(e) {
     for (var i = 0; i < clearedRows.length; i++) {
       if (clearedRows[i] >= 2) sheet.deleteRow(clearedRows[i]);
     }
+    // DEV (sheet-surrogate-keys): a brand-new row just got its checkbox above - give it a task id too.
+    ensureTaskIds_(sheet);
+  }
+
+  // DEV (sheet-surrogate-keys): a paste that reached the hidden Task ID column (e.g. a whole-row
+  // copy, which carries hidden cells along even though they're never visibly selected) can
+  // duplicate a task id onto the pasted row - this is the exact scenario the branch exists to
+  // test. Repair it immediately rather than waiting for a manual "Repair headers & triggers".
+  // Idempotent, so it's harmless to also fire right after the branch above already ran.
+  if (range.getLastColumn() >= 6) {
+    ensureTaskIds_(sheet);
   }
 }
 
