@@ -1260,8 +1260,11 @@ fun SettingsScreen(
     var maxQueueSize by remember { mutableStateOf(initialMaxQueueSize.toString()) }
     var sheetUrl by remember { mutableStateOf(initialSheetUrl) }
     var webAppUrl by remember { mutableStateOf(initialWebAppUrl) }
-    // Accordion: at most one section open at a time. "" means all collapsed.
-    var openSection by remember { mutableStateOf("Google Sheet Connection") }
+    // Accordion: at most one section open at a time. "" means all collapsed. Google Sheet
+    // Connection opens by default only for a not-yet-configured install (no Sheet URL saved
+    // yet) - once it's set up, Task Categories/Prompting Schedule are the ones someone's more
+    // likely to come back and change, so nothing forces itself open over them.
+    var openSection by remember { mutableStateOf(if (initialSheetUrl.isBlank()) "Google Sheet Connection" else "") }
     val focusManager = LocalFocusManager.current
 
     @Composable
@@ -1296,76 +1299,6 @@ fun SettingsScreen(
                     modifier = Modifier.padding(top = 16.dp, bottom = 4.dp),
                     style = MaterialTheme.typography.headlineMedium
                 )
-            }
-
-            item {
-                OutlinedCard(modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        // Same section, wording and control order as ActiveTasks' Settings: why a
-                        // Sheet URL -> box -> Scan; why a Web App URL -> box -> Scan; one action button.
-                        sectionHeader("Google Sheet Connection")
-                        if (openSection == "Google Sheet Connection") {
-                            Text(
-                                "Your tasks live in a Google Sheet you own. Paste its URL, or scan the Sheet QR code from the onboarding page, so the app can read it - each tab (except one named \"README\") becomes a task category.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            OutlinedTextField(
-                                value = sheetUrl,
-                                onValueChange = { sheetUrl = it },
-                                modifier = Modifier.fillMaxWidth(),
-                                label = { Text("Google Sheet URL") },
-                                placeholder = { Text("https://docs.google.com/spreadsheets/d/...") },
-                                singleLine = true
-                            )
-                            Button(
-                                modifier = Modifier.fillMaxWidth(),
-                                onClick = onOpenQrScanner
-                            ) {
-                                Text("Scan Sheet QR Code")
-                            }
-                            Text(
-                                "The Web App is a small script inside your Sheet that lets the app write back to it - " +
-                                    "referring a task to ActiveTasks. Deploy it once from your Sheet (Extensions → " +
-                                    "Apps Script → Deploy → New deployment → Web app), then paste its URL or scan " +
-                                    "its QR code from the onboarding page.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            OutlinedTextField(
-                                value = webAppUrl,
-                                onValueChange = {
-                                    webAppUrl = it
-                                    onWebAppUrlChanged(it.trim())
-                                },
-                                modifier = Modifier.fillMaxWidth(),
-                                label = { Text("Apps Script Web App URL") },
-                                placeholder = { Text("https://script.google.com/macros/s/.../exec") },
-                                singleLine = true
-                            )
-                            Button(
-                                modifier = Modifier.fillMaxWidth(),
-                                onClick = onOpenQrScanner
-                            ) {
-                                Text("Scan Web App QR Code")
-                            }
-                            Button(
-                                modifier = Modifier.fillMaxWidth(),
-                                enabled = sheetUrl.isNotBlank() && !isImportingSheet,
-                                onClick = { onSyncSheet(sheetUrl.trim()) }
-                            ) {
-                                Text(if (isImportingSheet) "Updating..." else "Update Tasks")
-                            }
-                            if (importMessage != null) {
-                                Text(
-                                    importMessage,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                        }
-                    }
-                }
             }
 
             item {
@@ -1506,6 +1439,78 @@ fun SettingsScreen(
                                 Button(modifier = Modifier.weight(1f), onClick = onOpenTaskPool) {
                                     Text("Task Pool")
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+
+            item {
+                OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        // Same section, wording and control order as ActiveTasks' Settings: why a
+                        // Sheet URL -> box -> Scan; why a Web App URL -> box -> Scan; one action button.
+                        // Placed right above About - Task Categories/Prompting Schedule above are
+                        // more likely to be revisited than this one-time setup section.
+                        sectionHeader("Google Sheet Connection")
+                        if (openSection == "Google Sheet Connection") {
+                            Text(
+                                "Your tasks live in a Google Sheet you own. Paste its URL, or scan the Sheet QR code from the onboarding page, so the app can read it - each tab (except one named \"README\") becomes a task category.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            OutlinedTextField(
+                                value = sheetUrl,
+                                onValueChange = { sheetUrl = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("Google Sheet URL") },
+                                placeholder = { Text("https://docs.google.com/spreadsheets/d/...") },
+                                singleLine = true
+                            )
+                            Button(
+                                modifier = Modifier.fillMaxWidth(),
+                                onClick = onOpenQrScanner
+                            ) {
+                                Text("Scan Sheet QR Code")
+                            }
+                            Text(
+                                "The Web App is a small script inside your Sheet that lets the app write back to it - " +
+                                    "referring a task to ActiveTasks. Deploy it once from your Sheet (Extensions → " +
+                                    "Apps Script → Deploy → New deployment → Web app), then paste its URL or scan " +
+                                    "its QR code from the onboarding page.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            OutlinedTextField(
+                                value = webAppUrl,
+                                onValueChange = {
+                                    webAppUrl = it
+                                    onWebAppUrlChanged(it.trim())
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("Apps Script Web App URL") },
+                                placeholder = { Text("https://script.google.com/macros/s/.../exec") },
+                                singleLine = true
+                            )
+                            Button(
+                                modifier = Modifier.fillMaxWidth(),
+                                onClick = onOpenQrScanner
+                            ) {
+                                Text("Scan Web App QR Code")
+                            }
+                            Button(
+                                modifier = Modifier.fillMaxWidth(),
+                                enabled = sheetUrl.isNotBlank() && !isImportingSheet,
+                                onClick = { onSyncSheet(sheetUrl.trim()) }
+                            ) {
+                                Text(if (isImportingSheet) "Updating..." else "Update Tasks")
+                            }
+                            if (importMessage != null) {
+                                Text(
+                                    importMessage,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
                             }
                         }
                     }
