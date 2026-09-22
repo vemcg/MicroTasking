@@ -24,7 +24,7 @@ from openpyxl.worksheet.hyperlink import Hyperlink
 INVALID_SHEET_TITLE_CHARS = str.maketrans({c: "-" for c in "/\\?*[]:"})
 
 # Origin version of this template. Keep in sync with buildVersionBase in app/build.gradle.kts.
-TEMPLATE_VERSION = "0.1.8"
+TEMPLATE_VERSION = "0.2.0"
 
 # Keep this text in sync with readmeData in scripts/populate_google_sheet.js.
 README_CONTENT = [

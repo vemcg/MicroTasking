@@ -43,7 +43,7 @@
  */
 
 // Origin version of this template. Keep in sync with buildVersionBase in app/build.gradle.kts.
-var TEMPLATE_VERSION = "0.1.8";
+var TEMPLATE_VERSION = "0.2.0";
 
 function setupMicroTaskingSheet() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
