@@ -14,23 +14,33 @@ import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
@@ -67,6 +77,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -74,6 +85,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -129,6 +142,7 @@ class MainActivity : ComponentActivity() {
                         // directly into SharedPreferences (e.g. over adb) could still be <= 0.
                         maxQueueSize = preferences.getInt("max_task_queue_size", 3).coerceAtLeast(1),
                         externalSheetUrl = preferences.getString("external_sheet_url", "") ?: "",
+                        webAppUrl = preferences.getString("web_app_url", "") ?: "",
                         managedTasks = readManagedTasks(
                             preferences.getString("managed_tasks", "[]") ?: "[]"
                         ),
@@ -191,6 +205,11 @@ class MainActivity : ComponentActivity() {
                         onSheetUrlSaved = { sheetUrl ->
                             preferences.edit()
                                 .putString("external_sheet_url", sheetUrl)
+                                .apply()
+                        },
+                        onWebAppUrlSaved = { url ->
+                            preferences.edit()
+                                .putString("web_app_url", url)
                                 .apply()
                         },
                         onBackgroundPromptsChanged = { enabled ->
@@ -256,6 +275,7 @@ fun MicroTaskingApp(
     promptsPerDay: String,
     maxQueueSize: Int,
     externalSheetUrl: String,
+    webAppUrl: String,
     userTasks: List<UserTask>,
     managedTasks: List<ManagedTask>,
     declineCounts: Map<String, Int>,
@@ -273,6 +293,7 @@ fun MicroTaskingApp(
     onManagedTasksSaved: (List<ManagedTask>) -> Unit,
     onDeclineCountsSaved: (Map<String, Int>) -> Unit,
     onSheetUrlSaved: (String) -> Unit,
+    onWebAppUrlSaved: (String) -> Unit,
     onBackgroundPromptsChanged: (Boolean) -> Unit,
     onVacationModeChanged: (Boolean) -> Unit
 ) {
@@ -289,6 +310,10 @@ fun MicroTaskingApp(
     var savedPromptsPerDay by remember { mutableStateOf(promptsPerDay) }
     var savedMaxQueueSize by remember { mutableIntStateOf(maxQueueSize) }
     var savedSheetUrl by remember { mutableStateOf(externalSheetUrl) }
+    var savedWebAppUrl by remember { mutableStateOf(webAppUrl) }
+    var referralInFlightTaskId by remember { mutableStateOf<String?>(null) }
+    var referralErrorMessage by remember { mutableStateOf<String?>(null) }
+    var showingReferralMatrixFor by remember { mutableStateOf<String?>(null) }
     var savedUserTasks by remember { mutableStateOf(userTasks) }
     var savedManagedTasks by remember { mutableStateOf(managedTasks) }
     var savedDeclineCounts by remember { mutableStateOf(declineCounts) }
@@ -307,6 +332,11 @@ fun MicroTaskingApp(
     var queueFullFlashUntil by remember { mutableLongStateOf(0L) }
     var isImportingSheet by remember { mutableStateOf(false) }
     var sheetImportMessage by remember { mutableStateOf<String?>(null) }
+    // A sync already in flight was fetched before whatever change just happened, so its result is
+    // stale: [resyncPending] queues one more sync behind it, and [referredDuringSync] keeps the
+    // stale result from un-referring a task referred while it was running.
+    var resyncPending by remember { mutableStateOf(false) }
+    val referredDuringSync = remember { mutableSetOf<String>() }
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
     val availableCategories = (savedManagedTasks.map { it.category } + savedUserTasks.map { it.category })
@@ -329,6 +359,11 @@ fun MicroTaskingApp(
     fun persistTaskQueue(newQueue: List<TaskStackEntry>) {
         taskQueue = newQueue
         TaskDelivery.prefs(context).edit().putString("task_queue", writeTaskQueue(newQueue)).apply()
+    }
+
+    fun persistManagedTasks(newTasks: List<ManagedTask>) {
+        savedManagedTasks = newTasks
+        onManagedTasksSaved(newTasks)
     }
 
     fun persistStreak(newStreak: Int) {
@@ -395,8 +430,13 @@ fun MicroTaskingApp(
     }
 
     fun runSheetImport(url: String) {
+        if (isImportingSheet) {
+            resyncPending = true
+            return
+        }
         isImportingSheet = true
         sheetImportMessage = null
+        referredDuringSync.clear()
         coroutineScope.launch {
             val result = withContext(Dispatchers.IO) {
                 importExternalTasksFromSheet(url)
@@ -417,6 +457,20 @@ fun MicroTaskingApp(
             if (authoritativeCategories.isNotEmpty()) {
                 val before = savedManagedTasks.map { it.category }.toSet() + savedUserTasks.map { it.category }.toSet()
                 savedManagedTasks = mergeImportedManagedTasks(importedTasks, savedManagedTasks, authoritativeCategories)
+                // Importance/Urgency never come from this CSV path (see SPEC.md "Sheet
+                // write-back": hiding a column doesn't exclude it from CSV/gviz export, so those
+                // two columns are read via the Web App only) - fold in the current referral state
+                // right after the CSV-based merge, at this same sync boundary, if a Web App URL
+                // is configured. A blank/unreachable Web App just leaves referredAt as whatever
+                // mergeImportedManagedTasks already carried forward from prior local state.
+                if (savedWebAppUrl.isNotBlank()) {
+                    val referredKeysResult = withContext(Dispatchers.IO) {
+                        WebAppClient.getReferredRowKeys(savedWebAppUrl)
+                    }
+                    referredKeysResult.onSuccess { referredKeys ->
+                        savedManagedTasks = refreshReferralState(savedManagedTasks, referredKeys + referredDuringSync)
+                    }
+                }
                 onManagedTasksSaved(savedManagedTasks)
                 val prunedUserTasks = savedUserTasks.filter { it.category in authoritativeCategories }
                 if (prunedUserTasks.size != savedUserTasks.size) {
@@ -439,7 +493,71 @@ fun MicroTaskingApp(
                 sheetImportMessage = "Couldn't read any tabs from this Sheet. Check the URL and that sharing is " +
                     "\"Anyone with the link can view\"."
             }
+            if (resyncPending) {
+                resyncPending = false
+                runSheetImport(savedSheetUrl)
+            }
         }
+    }
+
+    /**
+     * "Refer to ActiveTasks" (see SPEC.md "Task referral to ActiveTasks"): writes importance/urgency to the
+     * task's Sheet row via the Apps Script Web App, and on success stamps ManagedTask.referredAt
+     * locally right away (not waiting on the next sync) and removes the task from the queue with
+     * a replacement backfilled in its slot - a neutral outcome, same as Substitute, whether or not
+     * the task had already been Started. A sync then runs so the Sheet's view is re-read straight
+     * after the write.
+     */
+    fun submitReferral(taskId: String, importance: Double, urgency: Double) {
+        val task = taskQueue.find { it.task.id == taskId }?.task ?: return
+        referralInFlightTaskId = taskId
+        referralErrorMessage = null
+        coroutineScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                WebAppClient.setPriority(savedWebAppUrl, task.category, task.description, importance, urgency)
+            }
+            referralInFlightTaskId = null
+            result.onSuccess {
+                DiagnosticLog.log(context, "REFERRED", "task=$taskId category=${task.category} importance=$importance urgency=$urgency")
+                val updatedTasks = savedManagedTasks.map {
+                    if (it.id == taskId) it.copy(referredAt = System.currentTimeMillis()) else it
+                }
+                persistManagedTasks(updatedTasks)
+                val freshPromptTasks = eligiblePromptTasks(updatedTasks, savedUserTasks, savedCategories)
+                val queuedTaskIds = taskQueue.map { it.task.id }.toSet()
+                val candidates = freshPromptTasks.filter { it.id !in queuedTaskIds }.ifEmpty { freshPromptTasks }
+                val newQueue = if (candidates.isEmpty()) {
+                    taskQueue.filterNot { it.task.id == taskId }
+                } else {
+                    val replacement = chooseWeightedTask(
+                        tasks = candidates,
+                        activeCategoryOrder = activeCategoryOrder,
+                        previousTaskId = taskId
+                    )
+                    taskQueue.map { if (it.task.id == taskId) TaskStackEntry(replacement) else it }
+                }
+                persistTaskQueue(newQueue)
+                showingReferralMatrixFor = null
+                referredDuringSync += WebAppClient.rowKey(task.category, task.description)
+                if (savedSheetUrl.isNotBlank()) runSheetImport(savedSheetUrl)
+            }.onFailure { error ->
+                referralErrorMessage = error.message ?: "Couldn't reach the Web App - check the URL in Settings and your connection."
+            }
+        }
+    }
+
+    // Sync on every foreground entry - a cold launch, or coming back from ActiveTasks after it
+    // completed or released a row - so the task pool never waits on a manual "Update Tasks".
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val latestSyncOnStart by rememberUpdatedState {
+        if (savedSheetUrl.isNotBlank()) runSheetImport(savedSheetUrl)
+    }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_START) latestSyncOnStart()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     LaunchedEffect(
@@ -518,11 +636,28 @@ fun MicroTaskingApp(
 
     if (showingQrScanner) {
         QrScannerScreen(
-            onResult = { scannedUrl ->
+            onResult = { scannedText ->
                 showingQrScanner = false
-                savedSheetUrl = scannedUrl
-                onSheetUrlSaved(scannedUrl)
-                runSheetImport(scannedUrl)
+                // The onboarding page makes two separate QR codes - one carries the sheet URL, the
+                // other the Apps Script Web App URL (older codes carried both, newline-separated).
+                // Each line is classified by what it looks like, so a Web-App-only code just
+                // registers that URL without touching the sheet import, and vice versa.
+                // See parseSetupQr and scripts/generate_install_page.py's generateSheetQr/generateWebAppQr.
+                val payload = parseSetupQr(scannedText)
+                payload.webAppUrl?.let { webAppUrl ->
+                    savedWebAppUrl = webAppUrl
+                    onWebAppUrlSaved(webAppUrl)
+                }
+                val scannedSheetUrl = payload.sheetUrl
+                if (scannedSheetUrl != null) {
+                    savedSheetUrl = scannedSheetUrl
+                    onSheetUrlSaved(scannedSheetUrl)
+                    runSheetImport(scannedSheetUrl)
+                } else if (payload.webAppUrl != null) {
+                    sheetImportMessage = "Web App URL saved - \"Refer to ActiveTasks\" is ready to use."
+                } else {
+                    sheetImportMessage = "That QR code was empty - nothing was imported."
+                }
             },
             onCancel = { showingQrScanner = false }
         )
@@ -554,6 +689,7 @@ fun MicroTaskingApp(
             initialPromptsPerDay = savedPromptsPerDay,
             initialMaxQueueSize = savedMaxQueueSize,
             initialSheetUrl = savedSheetUrl,
+            initialWebAppUrl = savedWebAppUrl,
             isImportingSheet = isImportingSheet,
             importMessage = sheetImportMessage,
             backgroundPromptsRunning = backgroundPromptsRunning,
@@ -562,6 +698,10 @@ fun MicroTaskingApp(
             onOpenTaskPool = { showingTaskPool = true },
             onOpenQrScanner = { showingQrScanner = true },
             onSyncSheet = { url -> runSheetImport(url) },
+            onWebAppUrlChanged = { url ->
+                savedWebAppUrl = url
+                onWebAppUrlSaved(url)
+            },
             onCancel = { if (setupComplete) showingSettings = false },
             onBackgroundPromptsChanged = { setBackgroundPrompts(it) },
             onVacationModeChanged = { setVacationMode(it) },
@@ -594,6 +734,24 @@ fun MicroTaskingApp(
                 showingScore = false
             }
         )
+    } else if (showingReferralMatrixFor != null) {
+        val referredTask = taskQueue.find { it.task.id == showingReferralMatrixFor }?.task
+        if (referredTask == null) {
+            // The task left the queue some other way (e.g. Abandon tapped in a race) while the
+            // matrix was open - nothing sensible to refer any more, just back out.
+            showingReferralMatrixFor = null
+        } else {
+            EisenhowerReferralScreen(
+                task = referredTask,
+                submitting = referralInFlightTaskId == referredTask.id,
+                errorMessage = referralErrorMessage,
+                onConfirm = { importance, urgency -> submitReferral(referredTask.id, importance, urgency) },
+                onCancel = {
+                    showingReferralMatrixFor = null
+                    referralErrorMessage = null
+                }
+            )
+        }
     } else {
         TaskPromptScreen(
             taskEntries = visibleTaskEntries,
@@ -661,6 +819,10 @@ fun MicroTaskingApp(
                     persistTaskQueue(taskQueue.map { if (it.task.id == taskId) TaskStackEntry(replacement) else it })
                 }
             },
+            onRefer = { taskId ->
+                referralErrorMessage = null
+                showingReferralMatrixFor = taskId
+            },
             onNextPrompt = {
                 val freshQueue = makeTaskStack(promptTasks, maxEntries = savedMaxQueueSize)
                 freshQueue.forEach {
@@ -705,6 +867,7 @@ fun TaskPromptScreen(
     onComplete: (String) -> Unit,
     onAbandon: (String) -> Unit,
     onSubstitute: (String) -> Unit,
+    onRefer: (String) -> Unit,
     onNextPrompt: () -> Unit
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
@@ -773,12 +936,14 @@ fun TaskPromptScreen(
                         TaskLifecycleState.READY -> {
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
                                 Button(modifier = Modifier.weight(1f), onClick = { onStart(task.id) }) { Text("Start") }
+                                ReferButton { onRefer(task.id) }
                                 Button(modifier = Modifier.weight(1f), onClick = { onSubstitute(task.id) }) { Text("Substitute") }
                             }
                         }
                         TaskLifecycleState.STARTED -> {
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
                                 Button(modifier = Modifier.weight(1f), onClick = { onComplete(task.id) }) { Text("Done") }
+                                ReferButton { onRefer(task.id) }
                                 Button(modifier = Modifier.weight(1f), onClick = { onAbandon(task.id) }) { Text("Abandon") }
                             }
                         }
@@ -802,7 +967,7 @@ fun TaskPromptScreen(
 
         val countdownText = when {
             queueFullFlash -> "Queue full — finish one first"
-            vacationMode -> "On vacation — uncheck it in Settings to resume"
+            vacationMode -> "Hard paused — uncheck it in Settings to resume"
             promptsPerDay <= 0 -> "Automatic prompts off — set \"prompts per day\""
             !backgroundPromptsRunning && withinWindow -> "Paused — tap for a task now"
             !withinWindow && nextDispatchEpoch != null ->
@@ -822,6 +987,140 @@ fun TaskPromptScreen(
                 style = MaterialTheme.typography.titleMedium,
                 color = if (queueFullFlash) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
             )
+        }
+    }
+}
+
+/**
+ * The "Refer to ActiveTasks" hand-off button (see SPEC.md "Task referral to ActiveTasks"): a plain filled
+ * Button, so it matches Start/Substitute/Done/Abandon, labeled "Activate" rather than an unlabeled
+ * arrow icon. Sits in the middle of the Ready (Start / Substitute) and Started (Done / Abandon)
+ * rows, which are exactly the two states where referral is available; referring a Started task
+ * discards its timer.
+ */
+@Composable
+private fun RowScope.ReferButton(onClick: () -> Unit) {
+    Button(modifier = Modifier.weight(1f), onClick = onClick) {
+        Text("Activate")
+    }
+}
+
+/**
+ * Full-screen Eisenhower-matrix touch capture for "Refer to ActiveTasks" (see SPEC.md "Task referral
+ * to ActiveTasks"). Records the *precise* touch position, not just which quadrant it lands in: the
+ * matrix box's horizontal position maps to urgency (left edge = 1.0, right edge = 0.0) and
+ * vertical position maps to importance (top edge = 1.0, bottom edge = 0.0) - two continuous
+ * floats, matching the quadrant layout ActiveTasks's own triage widget uses (Important/Not important
+ * rows, Urgent/Not urgent columns; top-left = "Do First"). Two-step: tap/drag to place the
+ * marker, then a separate Confirm button actually submits - a single accidental tap shouldn't
+ * commit a referral.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun EisenhowerReferralScreen(
+    task: ManagedTask,
+    submitting: Boolean,
+    errorMessage: String?,
+    onConfirm: (importance: Double, urgency: Double) -> Unit,
+    onCancel: () -> Unit
+) {
+    var markerFraction by remember(task.id) { mutableStateOf<Offset?>(null) }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        TopAppBar(
+            title = { Text("Refer to ActiveTasks") },
+            navigationIcon = {
+                IconButton(onClick = onCancel) {
+                    Icon(Icons.Filled.ArrowBack, contentDescription = "Cancel")
+                }
+            }
+        )
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(task.description, style = MaterialTheme.typography.headlineSmall)
+            Text(
+                "Tap where this task falls on the matrix, then Confirm. Exact position matters, " +
+                    "not just the quadrant.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            // The matrix is a square (the largest one that fits the space left over), centered.
+            // The touch handlers live on the square itself so the fractions are relative to it.
+            BoxWithConstraints(
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(minOf(maxWidth, maxHeight))
+                        .pointerInput(task.id) {
+                            detectTapGestures { offset ->
+                                markerFraction = Offset(
+                                    (offset.x / size.width).coerceIn(0f, 1f),
+                                    (offset.y / size.height).coerceIn(0f, 1f)
+                                )
+                            }
+                        }
+                        .pointerInput(task.id) {
+                            detectDragGestures { change, _ ->
+                                markerFraction = Offset(
+                                    (change.position.x / size.width).coerceIn(0f, 1f),
+                                    (change.position.y / size.height).coerceIn(0f, 1f)
+                                )
+                            }
+                        }
+                ) {
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        val midX = size.width / 2f
+                        val midY = size.height / 2f
+                        val gridColor = Color.Gray
+                        drawRect(color = gridColor, size = size, style = Stroke(width = 2f))
+                        drawLine(gridColor, Offset(midX, 0f), Offset(midX, size.height), strokeWidth = 2f)
+                        drawLine(gridColor, Offset(0f, midY), Offset(size.width, midY), strokeWidth = 2f)
+                        markerFraction?.let { fraction ->
+                            drawCircle(
+                                color = Color.Red,
+                                radius = 18f,
+                                center = Offset(fraction.x * size.width, fraction.y * size.height)
+                            )
+                        }
+                    }
+                    // Urgency labels sit at the vertical middle of the left/right edges so they
+                    // don't crowd the "Important" label at the top center.
+                    Text("Urgent", modifier = Modifier.align(Alignment.CenterStart).padding(6.dp), style = MaterialTheme.typography.labelMedium)
+                    Text("Not urgent", modifier = Modifier.align(Alignment.CenterEnd).padding(6.dp), style = MaterialTheme.typography.labelMedium)
+                    Text("Important", modifier = Modifier.align(Alignment.TopCenter).padding(6.dp), style = MaterialTheme.typography.labelMedium)
+                    Text("Not important", modifier = Modifier.align(Alignment.BottomCenter).padding(6.dp), style = MaterialTheme.typography.labelMedium)
+                }
+            }
+
+            if (errorMessage != null) {
+                Text(errorMessage, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(modifier = Modifier.weight(1f), onClick = onCancel, enabled = !submitting) {
+                    Text("Cancel")
+                }
+                Button(
+                    modifier = Modifier.weight(1f),
+                    enabled = markerFraction != null && !submitting,
+                    onClick = {
+                        val fraction = markerFraction ?: return@Button
+                        val importance = (1.0 - fraction.y).toDouble()
+                        val urgency = (1.0 - fraction.x).toDouble()
+                        onConfirm(importance, urgency)
+                    }
+                ) {
+                    Text(if (submitting) "Referring…" else "Confirm")
+                }
+            }
         }
     }
 }
@@ -939,6 +1238,7 @@ fun SettingsScreen(
     initialPromptsPerDay: String,
     initialMaxQueueSize: Int,
     initialSheetUrl: String = "",
+    initialWebAppUrl: String = "",
     isImportingSheet: Boolean = false,
     importMessage: String? = null,
     backgroundPromptsRunning: Boolean,
@@ -947,6 +1247,7 @@ fun SettingsScreen(
     onOpenTaskPool: () -> Unit,
     onOpenQrScanner: () -> Unit,
     onSyncSheet: (String) -> Unit,
+    onWebAppUrlChanged: (String) -> Unit,
     onCancel: () -> Unit,
     onBackgroundPromptsChanged: (Boolean) -> Unit,
     onVacationModeChanged: (Boolean) -> Unit,
@@ -958,8 +1259,12 @@ fun SettingsScreen(
     var promptsPerDay by remember { mutableStateOf(initialPromptsPerDay) }
     var maxQueueSize by remember { mutableStateOf(initialMaxQueueSize.toString()) }
     var sheetUrl by remember { mutableStateOf(initialSheetUrl) }
-    // Accordion: at most one section open at a time. "" means all collapsed.
-    var openSection by remember { mutableStateOf("Import External Task Pool") }
+    var webAppUrl by remember { mutableStateOf(initialWebAppUrl) }
+    // Accordion: at most one section open at a time. "" means all collapsed. Google Sheet
+    // Connection opens by default only for a not-yet-configured install (no Sheet URL saved
+    // yet) - once it's set up, Task Categories/Prompting Schedule are the ones someone's more
+    // likely to come back and change, so nothing forces itself open over them.
+    var openSection by remember { mutableStateOf(if (initialSheetUrl.isBlank()) "Google Sheet Connection" else "") }
     val focusManager = LocalFocusManager.current
 
     @Composable
@@ -994,49 +1299,6 @@ fun SettingsScreen(
                     modifier = Modifier.padding(top = 16.dp, bottom = 4.dp),
                     style = MaterialTheme.typography.headlineMedium
                 )
-            }
-
-            item {
-                OutlinedCard(modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        sectionHeader("Import External Task Pool")
-                        if (openSection == "Import External Task Pool") {
-                            Text(
-                                "Paste your Google Sheet URL into the onboarding page, then tap Scan QR Code below to register it here with your phone's camera. Each tab in the sheet (except a tab named \"README\") becomes a task category. Tasks import automatically right after a scan; use Update Tasks any time afterward to re-sync.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            OutlinedTextField(
-                                value = sheetUrl,
-                                onValueChange = { sheetUrl = it },
-                                modifier = Modifier.fillMaxWidth(),
-                                label = { Text("Google Sheet / CSV URL") },
-                                placeholder = { Text("https://docs.google.com/spreadsheets/d/...") },
-                                singleLine = true
-                            )
-                            Button(
-                                modifier = Modifier.fillMaxWidth(),
-                                onClick = onOpenQrScanner
-                            ) {
-                                Text("Scan QR Code")
-                            }
-                            Button(
-                                modifier = Modifier.fillMaxWidth(),
-                                enabled = sheetUrl.isNotBlank() && !isImportingSheet,
-                                onClick = { onSyncSheet(sheetUrl.trim()) }
-                            ) {
-                                Text(if (isImportingSheet) "Updating..." else "Update Tasks")
-                            }
-                            if (importMessage != null) {
-                                Text(
-                                    importMessage,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                        }
-                    }
-                }
             }
 
             item {
@@ -1089,12 +1351,8 @@ fun SettingsScreen(
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         sectionHeader("Prompting Schedule")
                         if (openSection == "Prompting Schedule") {
-                            Button(
-                                modifier = Modifier.fillMaxWidth(),
-                                onClick = { onBackgroundPromptsChanged(!backgroundPromptsRunning) }
-                            ) {
-                                Text(if (backgroundPromptsRunning) "Pause task queue" else "Resume task queue")
-                            }
+                            // Pause/Resume lives on the main task-list screen (and the score
+                            // screen) - a second copy here was redundant, so it's not repeated.
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically
@@ -1103,7 +1361,7 @@ fun SettingsScreen(
                                     checked = vacationMode,
                                     onCheckedChange = onVacationModeChanged
                                 )
-                                Text("On vacation — stop everything until I uncheck this")
+                                Text("Hard pause — stop everything until I uncheck this")
                             }
                             Text(
                                 "Overrides Pause/Resume and the active window entirely - while checked, nothing " +
@@ -1181,6 +1439,78 @@ fun SettingsScreen(
                                 Button(modifier = Modifier.weight(1f), onClick = onOpenTaskPool) {
                                     Text("Task Pool")
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+
+            item {
+                OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        // Same section, wording and control order as ActiveTasks' Settings: why a
+                        // Sheet URL -> box -> Scan; why a Web App URL -> box -> Scan; one action button.
+                        // Placed right above About - Task Categories/Prompting Schedule above are
+                        // more likely to be revisited than this one-time setup section.
+                        sectionHeader("Google Sheet Connection")
+                        if (openSection == "Google Sheet Connection") {
+                            Text(
+                                "Your tasks live in a Google Sheet you own. Paste its URL, or scan the Sheet QR code from the onboarding page, so the app can read it - each tab (except one named \"README\") becomes a task category.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            OutlinedTextField(
+                                value = sheetUrl,
+                                onValueChange = { sheetUrl = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("Google Sheet URL") },
+                                placeholder = { Text("https://docs.google.com/spreadsheets/d/...") },
+                                singleLine = true
+                            )
+                            Button(
+                                modifier = Modifier.fillMaxWidth(),
+                                onClick = onOpenQrScanner
+                            ) {
+                                Text("Scan Sheet QR Code")
+                            }
+                            Text(
+                                "The Web App is a small script inside your Sheet that lets the app write back to it - " +
+                                    "referring a task to ActiveTasks. Deploy it once from your Sheet (Extensions → " +
+                                    "Apps Script → Deploy → New deployment → Web app), then paste its URL or scan " +
+                                    "its QR code from the onboarding page.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            OutlinedTextField(
+                                value = webAppUrl,
+                                onValueChange = {
+                                    webAppUrl = it
+                                    onWebAppUrlChanged(it.trim())
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("Apps Script Web App URL") },
+                                placeholder = { Text("https://script.google.com/macros/s/.../exec") },
+                                singleLine = true
+                            )
+                            Button(
+                                modifier = Modifier.fillMaxWidth(),
+                                onClick = onOpenQrScanner
+                            ) {
+                                Text("Scan Web App QR Code")
+                            }
+                            Button(
+                                modifier = Modifier.fillMaxWidth(),
+                                enabled = sheetUrl.isNotBlank() && !isImportingSheet,
+                                onClick = { onSyncSheet(sheetUrl.trim()) }
+                            ) {
+                                Text(if (isImportingSheet) "Updating..." else "Update Tasks")
+                            }
+                            if (importMessage != null) {
+                                Text(
+                                    importMessage,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
                             }
                         }
                     }

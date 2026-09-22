@@ -6,8 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 MicroTasking is an Android app (Kotlin + Jetpack Compose) that periodically and semi-randomly
 prompts the user, within a configurable daily time window, to do a short task (5-15 min) pulled
-from a pool they customize via a shared Google Sheet. It has a companion app, **2do2go**
-(sibling repo `../2do2go`), a traditional to-do list sharing the same spreadsheet — see
+from a pool they customize via a shared Google Sheet. It has a companion app, **ActiveTasks**
+(sibling repo `../ActiveTasks`), a traditional to-do list sharing the same spreadsheet — see
 PUNCH_LIST.md item 8 for the planned hand-off between the two.
 
 ## Commands

@@ -1,0 +1,157 @@
+// Copyright (c) 2026 Vern McGeorge. All rights reserved.
+package com.microtasking.app
+
+import org.json.JSONArray
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+import java.nio.charset.StandardCharsets
+
+/** What a scanned setup QR code carried: either value may be absent (see [parseSetupQr]). */
+data class SetupQrPayload(val sheetUrl: String?, val webAppUrl: String?)
+
+/**
+ * Apps Script Web App URLs live on script.google.com (`/macros/s/<id>/exec`, or
+ * `/a/macros/<domain>/s/<id>/exec` for Workspace accounts); a Google Sheet URL never does.
+ */
+fun looksLikeWebAppUrl(text: String): Boolean =
+    text.startsWith("http", ignoreCase = true) && text.contains("script.google.com/", ignoreCase = true)
+
+/**
+ * Splits the onboarding page's QR text (one URL per line) into its sheet URL and Web App URL by
+ * what each line looks like rather than by position, so a code carrying only the Web App URL, only
+ * the sheet URL (older codes), or both in either order all work.
+ */
+fun parseSetupQr(scannedText: String): SetupQrPayload {
+    val lines = scannedText.lines().map { it.trim() }.filter { it.isNotEmpty() }
+    return SetupQrPayload(
+        sheetUrl = lines.firstOrNull { !looksLikeWebAppUrl(it) },
+        webAppUrl = lines.firstOrNull { looksLikeWebAppUrl(it) }
+    )
+}
+
+/**
+ * Client for the per-user Apps Script Web App (see SPEC.md "Sheet connection & API (Apps Script
+ * Web App)") - the only path this app uses to read or write the hidden Importance/Urgency columns.
+ * Column A-C (checkbox/description/link) reads stay on the existing CSV/gviz path in
+ * [importExternalTasksFromSheet]; this is deliberately separate.
+ *
+ * Row identity is `(category, description)` - the tab name and the task's description text - not
+ * a row index, since rows shift under the bound script's delete-row-on-empty-description
+ * behavior (see `onSheetEdit_` in scripts/populate_google_sheet.js). Matches this app's existing
+ * `external-<category>-<description>` id convention.
+ */
+object WebAppClient {
+    private const val CONNECT_TIMEOUT_MS = 15_000
+    private const val READ_TIMEOUT_MS = 15_000
+
+    /** `"<category>|<description>"` - the row-identity key used throughout this file and TaskPool.refreshReferralState. */
+    fun rowKey(category: String, description: String): String = "$category|$description"
+
+    /**
+     * Writes this task's referral (importance/urgency in `[0, 1]`) to its Sheet row. Called the
+     * instant the Eisenhower touch is confirmed - on success the caller stamps
+     * [ManagedTask.referredAt] locally right away rather than waiting for the next sync.
+     */
+    fun setPriority(webAppUrl: String, category: String, description: String, importance: Double, urgency: Double): Result<Unit> =
+        post(
+            webAppUrl,
+            JSONObject().apply {
+                put("action", "setPriority")
+                put("category", category)
+                put("description", description)
+                put("importance", importance.coerceIn(0.0, 1.0))
+                put("urgency", urgency.coerceIn(0.0, 1.0))
+            }
+        ).map { }
+
+    /**
+     * Clears a row's Importance/Urgency (ActiveTasks's "Complete (for now)" - included here for
+     * completeness/testing even though this app's own UI doesn't trigger it; ActiveTasks calls the
+     * same endpoint directly).
+     */
+    fun clearPriority(webAppUrl: String, category: String, description: String): Result<Unit> =
+        post(
+            webAppUrl,
+            JSONObject().apply {
+                put("action", "clearPriority")
+                put("category", category)
+                put("description", description)
+            }
+        ).map { }
+
+    /**
+     * Fetches every row currently carrying a non-empty Importance or Urgency, as row-identity
+     * keys (see [rowKey]) - call only at existing sync boundaries (manual refresh + periodic
+     * background sync), never from `TaskDelivery.tick`/selection, which must stay a fast
+     * local-only read. Feed the result to [refreshReferralState].
+     */
+    fun getReferredRowKeys(webAppUrl: String): Result<Set<String>> = runCatching {
+        val connection = (URL(appendQuery(webAppUrl, "action=getPriorities")).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = CONNECT_TIMEOUT_MS
+            readTimeout = READ_TIMEOUT_MS
+        }
+        val body = connection.readResponse()
+        val json = JSONObject(body)
+        if (!json.optBoolean("ok", false)) {
+            error(json.optString("error", "Web App returned ok=false"))
+        }
+        val rows = json.optJSONArray("rows") ?: JSONArray()
+        buildSet {
+            for (i in 0 until rows.length()) {
+                val row = rows.getJSONObject(i)
+                add(rowKey(row.getString("category"), row.getString("description")))
+            }
+        }
+    }
+
+    /**
+     * Blank/non-http(s) URLs would otherwise surface as `MalformedURLException: no protocol: `,
+     * which tells the user nothing - say what to actually do instead.
+     */
+    private fun requireWebAppUrl(webAppUrl: String): String {
+        val trimmed = webAppUrl.trim()
+        if (trimmed.isEmpty()) {
+            error("No Web App URL is set yet. Add it in Settings (the \"Apps Script Web App URL\" field), then try again.")
+        }
+        if (!trimmed.startsWith("https://") && !trimmed.startsWith("http://")) {
+            error("The Web App URL in Settings doesn't look right - it should start with https://script.google.com/...")
+        }
+        return trimmed
+    }
+
+    private fun post(webAppUrl: String, body: JSONObject): Result<JSONObject> = runCatching {
+        val connection = (URL(requireWebAppUrl(webAppUrl)).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            doOutput = true
+            connectTimeout = CONNECT_TIMEOUT_MS
+            readTimeout = READ_TIMEOUT_MS
+            setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            // Apps Script Web Apps 302-redirect the first response to a script.googleusercontent.com
+            // URL; HttpURLConnection follows GET redirects automatically but not POST ones (redirect
+            // strips the body), so this must be retried as a GET-with-body-lost otherwise. Simplest
+            // fix: let the connection follow it as a GET carrying the same query-string fallback -
+            // Apps Script also accepts POST bodies on the redirected URL when instanceFollowRedirects
+            // is left true and the redirect is same-origin-equivalent (script.google.com family), so
+            // no special-casing needed here in practice.
+            instanceFollowRedirects = true
+        }
+        connection.outputStream.use { it.write(body.toString().toByteArray(StandardCharsets.UTF_8)) }
+        val responseBody = connection.readResponse()
+        val json = JSONObject(responseBody)
+        if (!json.optBoolean("ok", false)) {
+            error(json.optString("error", "Web App returned ok=false"))
+        }
+        json
+    }
+
+    private fun HttpURLConnection.readResponse(): String {
+        val stream = if (responseCode in 200..299) inputStream else errorStream
+        return stream?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText() }
+            ?: error("Web App call failed: HTTP $responseCode")
+    }
+
+    private fun appendQuery(url: String, query: String): String =
+        if (url.contains("?")) "$url&$query" else "$url?$query"
+}

@@ -61,8 +61,8 @@ deliberate — just do the task immediately.
   the odds toward shorter or longer tasks.
 
 ## On-prompt interaction (Start / Complete / Abandoned / Defer)
-- Each task on the stack starts in a **not-started** state, offering two actions:
-  **Start** and **Defer**.
+- Each task on the stack starts in a **not-started** state, offering two actions: **Start** and
+  **Defer**.
   - **Start** begins the personal work-timer for that task and is required before Complete or
     Abandoned become available — you can't mark something complete without having started it.
   - **Defer**: pick 1 week / 1 month / 3 months / 6 months. The task immediately leaves the
@@ -75,6 +75,13 @@ deliberate — just do the task immediately.
     "Per-task duration adaptation" for how this reshapes the task's tier.
   - **Abandoned**: manual give-up, counts as a failure against scoring. Task returns to the
     pool (still repeatable, not deferred, not disabled) for future selection.
+- **Refer to ActiveTasks** is available on **any** queued task regardless of the states above —
+  not-started, or already Started/mid-timer — the only requirement is that the task is currently
+  on the queue. See "Task referral to ActiveTasks" below for the full flow — in short, it opens an
+  Eisenhower-matrix touch screen, writes the touch position back to the shared Sheet, and removes
+  the task from the stack immediately with a replacement backfilled at the bottom (a neutral
+  outcome, like Defer — referring an already-Started task counts as neither Complete nor
+  Abandoned, and discards its in-progress timer).
 - **The only two ways a task fails**: (1) it gets **pushed off the top of the stack** when a
   new prompt fires while at the "max concurrent tasks" limit (see Task stack below), or
   (2) it is manually marked **Abandoned**. There is no separate deadline/timeout auto-fail —
@@ -162,15 +169,15 @@ deliberate — just do the task immediately.
   calls and nothing else leaves the phone.
 
 ## External task source (design finalized, not yet built)
-- **Getting the link into the app**: the GitHub Pages install page (same page as the
-  install/update QR) gets a text field where the user pastes an ordinary Google Sheet share
-  link and clicks "Generate QR". The page encodes it client-side into a custom-scheme QR
-  (`microtasking://import-tasks?url=<encoded sheet link>`) — no server involved, plain
-  JS/QR-library on the static page. The app registers an intent-filter for `microtasking://`
-  and jumps straight to an import-confirmation screen when that QR is scanned with the
-  in-app scanner (new capability — camera-based QR scan, requires `CAMERA` permission).
-- **Sharing requirement**: the Sheet just needs ordinary "Anyone with the link — Viewer"
-  sharing. No "Publish to web" step required.
+- **Getting the connection into the app**: the GitHub Pages onboarding page turns a **connection
+  code** (the Sheet's Apps Script Web App URL plus a secret key) into a setup QR, client-side —
+  no server, plain JS/QR-library on the static page. The in-app scanner (camera QR scan,
+  `CAMERA` permission) registers it. Full design in "Sheet connection & API" below. Older QR
+  codes that carry only a Sheet share link keep working as a read-only fallback (see "How tabs
+  are read").
+- **Sharing requirement**: none with a connection code — the Sheet can stay fully private
+  (owner-only), because the Web App runs as the owner. Only the legacy read-only fallback needs
+  "Anyone with the link — Viewer" sharing.
 - **Tabs = categories**: each tab in the Sheet becomes a category 1:1 (tab title is the
   category name), so users can define arbitrary custom categories just by naming tabs — no
   hardcoded category list needed for imported content.
@@ -190,12 +197,13 @@ deliberate — just do the task immediately.
   bundled Apps Script `scripts/populate_google_sheet.js`. That script is the source of truth for
   the shared template Sheet and is pushed to its bound project with `npm run push:sheet` (clasp);
   users who copy the template still paste it into their copy by hand.
-- **How tabs are read**: a one-time Sheets API v4 metadata call (`spreadsheets.get`) lists
-  every tab's title + internal `gid`, using a Google Cloud API key restricted to the Sheets
-  API and to this app's package name + signing-cert SHA-1 (locked to the checked-in debug
-  keystore). Each tab's rows are then fetched via the plain CSV export URL
-  (`.../export?format=csv&gid=<id>`), which needs no API key — just the link-sharing
-  permission above.
+- **How tabs are read**: with a connection code, one `getTasks` call to the Web App returns
+  every tab (in Sheet order) with its rows — see "Sheet connection & API". **Legacy fallback**
+  (a scan/URL carrying only a Sheet link, Sheet shared "Anyone with the link"): tab names from
+  the `.xlsx` export's `workbook.xml` (legacy GData worksheets feed as a backup), then each tab's
+  rows via the `gviz` CSV export by tab name — read-only, MicroTasking only, with no referral,
+  add, or delete. (The earlier plan of a restricted Google Cloud API key plus
+  `spreadsheets.get` was never built and is dropped.)
 - **Row schema per tab** (category comes from the tab, so no category column needed):
   column A = enabled checkbox (no header text — row 1 col A is the master toggle), column B =
   `Description`, column C = `Link` (optional). **No `durationMinutes` column** — duration is an
@@ -203,6 +211,12 @@ deliberate — just do the task immediately.
   imported task starts at 5 min. Rows with an empty description are skipped, not fatal. `link`,
   if a real hyperlink is used in the cell, is read as its target URL. The CSV parser honors
   `"`-quoted fields (so a description may contain commas) but not fields spanning newlines.
+- **`Importance`/`Urgency` columns** (added by "Task referral to ActiveTasks" below, matched by
+  header text like the columns above): hidden, warning-protected, not part of the user-facing
+  schema, and **not read via this CSV/gviz path at all** — unlike every other column, they're
+  read only through the Apps Script Web App (see "Sheet connection & API" below), specifically because
+  the CSV/gviz export doesn't respect a column's hidden state. A non-empty value on either makes
+  the row ineligible for selection.
 - **Import is all-or-nothing per row, not per checkbox**: every row with a description is
   imported. An unchecked column A means the task exists in the pool but is `enabled = false`, so
   it is stored and visible on the Task Pool screen but never queued. If a tab has no checkboxes
@@ -214,10 +228,274 @@ deliberate — just do the task immediately.
   `temporarilyUnavailable`) are carried over. Editing a description in the sheet changes its
   identity, so it reads as remove-old + add-new. (`MainActivity.parseExternalTaskCsv` /
   `TaskPool.mergeImportedManagedTasks`.)
-- **Sync cadence**: manual "Refresh now" always available, plus periodic background sync
-  (interval TBD, e.g. daily) once a source is registered.
+- **Sync cadence**: manual "Refresh now" always available. Both apps also sync automatically
+  every time they come to the foreground (a cold launch, or switching back from the other app)
+  and immediately after they change a row: MicroTasking after a referral, ActiveTasks after
+  Complete (for now) / Fully complete. A trigger that fires while a sync is already running
+  queues exactly one more sync behind it (the running one was fetched before the change), and the
+  change is protected from that stale result meanwhile (MicroTasking keeps the row referred;
+  ActiveTasks doesn't re-add the completed item). Periodic background sync is still TBD.
 - **Guardrails**: HTTPS-only, timeout + response-size cap on fetches, CSV parsed as plain data
   only (never rendered/executed as HTML).
+
+## Task referral to ActiveTasks (design finalized, not yet built)
+
+Companion to **External task source** above: once import is in place, a queued task can be
+**referred** to the sibling app **ActiveTasks** (`../ActiveTasks`) instead of being done here. See
+ActiveTasks's own `SPEC.md` ("Priority: Eisenhower matrix", "Referral bridge") and
+`PUNCH_LIST.md` item 1 for its side of this feature.
+
+- **Trigger**: a **"Refer to ActiveTasks"** action available on any queued task, in any state — not
+  gated to pre-Start like Defer (see "On-prompt interaction" above). Referring an already-Started
+  task discards its in-progress timer and counts as neither Complete nor Abandoned.
+- **Eisenhower touch capture**: tapping it opens a full-screen 2x2 matrix (same quadrant layout
+  ActiveTasks's own triage widget uses — Important/Not important rows, Urgent/Not urgent columns).
+  The **precise touch position** is recorded, not just which quadrant it landed in: horizontal
+  position maps to **urgency** (left edge = 1.0, right edge = 0.0), vertical position maps to
+  **importance** (top edge = 1.0, bottom edge = 0.0) — two continuous floats in `[0, 1]`, not
+  booleans. (Axis direction and the exact mapping are a first proposal — tunable, see Open
+  questions.)
+- **Write-back**: those two values are written to the task's row in the shared Sheet via the
+  Apps Script Web App (see "Sheet connection & API" below) as soon as the touch is confirmed. On
+  success, the task is immediately removed from this app's stack — same as Defer, a replacement
+  is selected and appended to the bottom to keep the stack full. On failure (network/Web App
+  error), the referral is not applied and the task stays on the stack (exact failure-state UX
+  TBD at build time).
+- **Exclusion from future selection**: a new field, `ManagedTask.referredAt: Long?` (epoch ms,
+  null = not referred), is the authoritative local signal — set immediately on a successful
+  referral write (no waiting on the next sync), and refreshed from the sheet's `Importance`/
+  `Urgency` state at every sync boundary (see "Sheet connection & API" below for how those are read).
+  `TaskDelivery`'s selection logic excludes any task with `referredAt != null`. This is a
+  **dedicated field, not a reuse of `ManagedTask.neverSuggest`**: `mergeImportedManagedTasks`
+  explicitly preserves `neverSuggest`/`temporarilyUnavailable` across every re-sync as
+  user-set flags that must survive re-import (see its doc comment in `TaskPool.kt`) — reusing
+  that field for referral would mean either fighting that preserve-on-resync contract when a
+  referral is reversed (ActiveTasks's "Complete (for now)"), or special-casing which resets are
+  "real" `neverSuggest` vs. referral-driven. A dedicated field avoids that entirely: it's simply
+  overwritten from sheet state on every sync, same as `enabled` already is.
+- **Sheet schema addition** (`populate_google_sheet.js` / `applyCategoryTabHeader_`): two new
+  columns per category tab — `Importance`, `Urgency` — matched by header text like
+  `Description`/`Link`, not position, placed after the existing columns. Both are **hidden**
+  (`Sheet.hideColumn`) and covered by a **warning-only protected range** — not a hard lock,
+  since the Web App runs as the sheet owner and needs to write them; the intent is to keep an
+  accidental manual edit from silently corrupting referral state, not to make the range
+  literally uneditable. A blank `Importance`/`Urgency` cell means "not referred." (ActiveTasks's
+  own progress value is local-only, not a sheet column — see its `SPEC.md`.)
+- **Row identity for the write**: the Apps Script endpoint resolves which row to write by
+  `(tab name, description text)`, scanning column B server-side — not by row/gid index. Matches
+  the existing `external-<category>-<description>` id convention, and index-based addressing
+  would be actively unsafe: `onSheetEdit_` already deletes rows and shifts everything up when a
+  description is cleared, so a cached row index could silently point at the wrong row moments
+  later.
+
+## Sheet connection & API (Apps Script Web App) (design finalized, not yet built)
+
+Replaces the earlier "Sheet write-back" design, which covered only the referral columns and left
+reading on the public CSV export. This section is the single contract between the Sheet-bound
+script (`scripts/populate_google_sheet.js`, owned by this repo) and **both** apps. ActiveTasks's
+`SPEC.md` points here rather than restating it.
+
+### Principles
+
+- **The Sheet is the source of truth; the API is a macro for hand edits.** Users are expected to
+  do most maintenance (tabs, rewording, reordering, bulk edits) directly in Google Sheets, and
+  nothing is locked out of either path. Every API action produces a state a person could have
+  produced by hand, and both apps must tolerate any hand edit made between two calls.
+- **Who owns a row is decided by its Importance/Urgency columns** (unchanged): both blank = in
+  MicroTasking's pool; either non-blank = in ActiveTasks's list (see "Task referral to ActiveTasks").
+- **ActiveTasks remains a companion, not a standalone to-do app.** It lists only rows that carry a
+  priority, has no "inbox" of unprioritized rows, and with nothing prioritized yet it comes up
+  blank. A row typed into the Sheet by hand is a MicroTasking pool task, not an ActiveTasks item, by
+  design. (A standalone ActiveTasks was considered and dropped 2026-09-19.)
+- **Both apps do the same things to the Sheet** (table below). They differ only in what a new
+  row starts as: MicroTasking adds an *unprioritized* row (lands in the pool); ActiveTasks adds a
+  *prioritized* row from its matrix touch (born in ActiveTasks's list, so MicroTasking never queues
+  it).
+
+| Operation | MicroTasking | ActiveTasks |
+|---|---|---|
+| Read every tab and row | import / periodic sync | "Sync Lists" (keeps only rows with a priority) |
+| Add a task | My Tasks → `createRow` without priority | Add item → `createRow` with the matrix touch |
+| Set priority | "Refer to ActiveTasks" → `setPriority` | re-triage → `setPriority` (write-through; the local copy updates even if the call fails) |
+| Clear priority | client function only, no UI | "Complete (for now)" → `clearPriority` |
+| Delete row | Task Pool → "Delete from Sheet" (confirm) → `deleteRow` | "Fully complete" → `deleteRow` |
+| Create tab | implicit: `createRow` with a new category name creates the tab | none — adds go to an existing list; tab management stays in the Sheet |
+
+Exact screen layout of the new Add/Delete actions is TBD at build time.
+
+### Connection code, key, and privacy
+
+- **Connection code** = the deployed Web App URL plus a secret key, as one string:
+  `https://script.google.com/macros/s/<id>/exec?key=<key>`. It is what the setup QR carries and
+  what both apps store. Apps treat it as an opaque URL and append `&action=…` (or POST to it).
+- **The key** is a random value (≥128 bits, e.g. a UUID with dashes stripped) the script keeps in
+  Script Properties, generated on first use. Every `doGet`/`doPost` requires `key=` in the query
+  string (GET and POST alike) and otherwise returns `{"ok":false,"code":"unauthorized"}`. A missing
+  and a wrong key are indistinguishable.
+- **The Sheet itself can be private.** The script runs "Execute as: Me", so it reads and writes
+  as the owner; nothing needs "Anyone with the link" any more, and the README/onboarding text
+  telling users to enable it is removed. The deployment still has to be "Who has access: Anyone"
+  (a phone can't sign in as the owner), which is why the key is what protects it.
+- **Honest limits.** The key is a bearer secret, like a share link: anyone who obtains the code
+  (screenshot, QR, clipboard) can read and write the task Sheet until it is reset. It is not
+  per-user sign-in (that would need OAuth and a Google Cloud project in both apps, deliberately
+  avoided). Mitigations: the code exposes only what the script returns (not the whole document,
+  hidden columns of unrelated tabs, or the README), and the menu item **MicroTasking → Reset
+  connection code** issues a new key, invalidating every old QR.
+- **Apps never log or display the full key.** Settings shows the URL with the key masked
+  (`…/exec?key=k7Qm…`), and `DiagnosticLog` and error messages redact any `key=` value.
+
+### Wire contract
+
+Every response is JSON: `{"ok":true, …}` or `{"ok":false,"code":"<code>","error":"<human text>"}`.
+Codes: `unauthorized`, `no_such_tab`, `no_such_row`, `invalid`, `reserved_tab` (the README tab),
+`busy` (couldn't take the script lock within ~10s), `unknown_action`. Row identity is always
+`(category = tab name, description = column B text, exact trimmed match)`, never a row/gid index;
+if hand edits ever produce two rows with the same description in one tab, the first wins.
+
+| Call | Request | Success response and effect |
+|---|---|---|
+| `hello` | `GET ?action=hello` | `{"ok":true,"apiVersion":2,"templateVersion":"0.1.8","actions":[…]}`. Apps call it first on every sync to detect an out-of-date deployment. |
+| `getTasks` | `GET ?action=getTasks` | `{"ok":true,"tabs":[{"name","needsRepair","rows":[{"enabled","description","link","importance","urgency"}]}]}` — see "Reading" below. |
+| `getPriorities` | `GET ?action=getPriorities` | Legacy (apiVersion 1) shape, kept for already-shipped clients: every row with a priority. |
+| `createRow` | `POST {"action":"createRow","category","description","link"?,"enabled"?,"importance"?,"urgency"?}` | `{"ok":true,"created":bool,"tabCreated":bool}` — see "Writing" below. |
+| `createTab` | `POST {"action":"createTab","name"}` | `{"ok":true,"created":bool}`. Formats a new tab like a hand-added one. No app UI in this version; kept so a future client isn't blocked. |
+| `setPriority` | `POST {"action":"setPriority","category","description","importance","urgency"}` (each 0–1) | `{"ok":true}`, or `no_such_tab` / `no_such_row`. |
+| `clearPriority` | `POST {"action":"clearPriority","category","description"}` | `{"ok":true,"found":bool}` — a missing tab or row is success (the row is already not in ActiveTasks's list). |
+| `deleteRow` | `POST {"action":"deleteRow","category","description"}` | `{"ok":true,"deleted":bool}` — a missing tab or row is success (already gone). |
+
+Not in the contract on purpose: renaming or deleting a **tab**, and editing an existing row's
+description/link/enabled flag. All are done by hand in the Sheet, which the apps already
+tolerate (see below), and any of them can be added later as a new action — `hello`'s `actions`
+list lets apps degrade gracefully. Sheets tab names can't contain `/`; `createRow`/`createTab`
+reject such names as `invalid` (see the caveat under "External task source").
+
+**Reading (`getTasks`).**
+- Tabs come back in Sheet order (tab order sets MicroTasking's category weighting), README
+  excluded, **empty tabs included** with `"rows":[]` (ActiveTasks shows an empty tab as an empty list).
+- Columns are found by header text, case-insensitively — `Description`, `Link`, `Importance`,
+  `Urgency` — and column A is always the enabled checkbox, so column reordering stays safe. The
+  script's own reads and writes use the same header lookup (no hardcoded column letters).
+- `enabled` is the checkbox's value; a blank column-A cell counts as enabled. A row with a blank
+  description is skipped. `link` is the hyperlink target if the cell holds a real link, else its
+  text. `importance`/`urgency` are numbers, or `null` when the cell is blank.
+- A tab with no header row (added by hand where the triggers never fired, e.g. on mobile) is read
+  with default columns B/C/D/E and reported `"needsRepair":true`; it is not an error. Reads never
+  write.
+
+**Writing — what the script must do itself.** A change made by a script does **not** fire the
+installable `onEdit`/`onChange` triggers (the comment above `onSheetEdit_` already notes this), so
+the Web App has to apply, in the script, everything those triggers would have done for a hand edit.
+The trigger helpers (`applyCategoryTabHeader_`, `addRowCheckbox_`, `ensureReferralColumns_`) are
+reused directly.
+- **`createRow`**: trims `category` and `description`; rejects an empty value, a category of
+  `README` (`reserved_tab`), a name with `/`, over 100 characters (Sheets' tab-name limit), a
+  `link` that isn't `http(s)://`, or a priority where only one of importance/urgency is given
+  (`invalid`). If the tab doesn't exist it is created at the far right (lowest odds; the user
+  reorders by hand) and headered/formatted first; a tab lacking a header is repaired first. If the
+  row already exists it is not duplicated: `created:false`, and if a priority was supplied while
+  the existing row has none it is applied (so re-adding a pool task from ActiveTasks refers it). A new
+  row is appended after the last row that has a description (not `getLastRow()`, which the hidden
+  columns can inflate), gets its checkbox in column A (checked unless `enabled:false`), and its
+  Importance/Urgency cells hold the supplied priority or stay blank.
+- **Descriptions and links are always stored as literal text.** A leading `=` is never evaluated
+  as a formula (the cell is set to plain-text format before writing).
+- **`setPriority`/`clearPriority`**: first repair the Importance/Urgency columns (header, hidden,
+  warning-protected) if the tab lacks them, so an older tab never ends up with visible, unprotected
+  referral values.
+- **`deleteRow`**: nothing to format — Sheets shifts the rows below up, the same result as the
+  existing clear-the-description behavior.
+- **Every write holds `LockService.getScriptLock()`** across find-then-write, so two phones (or
+  both apps) can't interleave; a timeout returns `busy`. The lock covers script runs only, not a
+  person typing in the Sheet at the same time — which is why identity is re-resolved by
+  description inside the lock rather than cached.
+
+### Hand-edit tolerance (both apps)
+
+The tab set, tab names, tab order, descriptions, and checkboxes can all change between any two
+calls. Therefore:
+- **Reads are authoritative.** Each import replaces the local view of every tab the Sheet
+  contains (unchanged: `mergeImportedManagedTasks` — the Sheet's tab names decide the category
+  list). ActiveTasks's re-sync keeps its existing "add only, never remove an in-progress item"
+  behavior.
+- **`no_such_tab` / `no_such_row` on a write is a state, not a failure.** It means the row was
+  changed by hand after the app last synced. The app shows a short notice ("That task was changed
+  or removed in your Sheet"), drops or refreshes the local item, and resyncs — it does not show the
+  generic "couldn't reach the Sheet" error.
+- **`unauthorized`** means the key was reset or the code is wrong: stop, and tell the user to scan
+  the new setup QR (no retry loop).
+- **`busy`** is retried once after ~2s, then surfaced like any other transient failure.
+- **Network failure or Web App error**: the write is not applied and local state is unchanged
+  (existing behavior); there is no offline write queue in this version. The one exception is
+  ActiveTasks's re-triage: its local copy keeps the new priority and the error is shown (see the
+  operations table).
+- **A successful add is mirrored locally at once**: the app inserts the task under the id the next
+  sync will produce (`external-<category>-<description>`) rather than waiting, so there is no
+  interim `custom-` copy and no duplicate after the sync. For ActiveTasks the inserted item carries the
+  priority it was created with.
+- **`TaskDelivery.tick` never calls the network** (unchanged). Reads happen at existing sync
+  boundaries (manual refresh, foreground entry, right after a row change - see "Sync cadence");
+  writes happen only on an explicit user action.
+
+### Adding tasks from the phone (My Tasks)
+
+MicroTasking's Settings → Local Task Management → My Tasks (description + category, stored locally
+as `custom-` tasks) becomes the on-the-go entry point:
+- **Connected** (a connection code is registered): "Add task" calls `createRow`; the category
+  field accepts an existing tab or a new name (which creates the tab). Nothing new is stored
+  locally as `custom-`.
+- **Not connected**: unchanged — local `custom-` tasks, as today.
+- Existing local `custom-` tasks get a one-time "Upload to Sheet" action once connected (each is a
+  `createRow`, then removed locally as the sync returns it as `external-…`). Exact UX TBD.
+- ActiveTasks gets an equivalent Add item (pick a list, type the item, touch the matrix) — see its
+  `SPEC.md`.
+
+### Getting the code into the apps, and deployment
+
+- **Setup QR**: one line of plain text — the connection code. The scanner classifies lines by
+  content (`script.google.com/` = connection code; anything else = legacy Sheet URL —
+  `parseSetupQr`), so old one- and two-line codes keep working. **The same QR works in both
+  apps**; ActiveTasks's scanner adopts `parseSetupQr` (today it drops the raw scanned text into its
+  Sheet-URL field).
+- **On scan**: MicroTasking saves the code, calls `hello`, then runs a full `getTasks` import;
+  ActiveTasks saves it and syncs.
+- **Interim (2026-09-20, built): two separate QR codes.** Until the connection code exists, the
+  onboarding page's setup step (`#setup`, shared by both apps) has one box and one single-line QR
+  for the Sheet URL and another for the Web App URL — not one combined two-line code. Each app
+  must update only the setting the scanned line belongs to (`parseSetupQr`); a scan never blanks
+  the other setting. ActiveTasks' scanner still writes raw scanned text into its Sheet-URL field,
+  so it overwrites the Sheet URL when given the Web App code — it must adopt `parseSetupQr` (see
+  its `PUNCH_LIST.md` item 3) before both codes are usable there. Its install page links to this
+  section rather than repeating the steps.
+  **Settings layout (both apps, identical):** one section titled **Google Sheet Connection**,
+  top to bottom: why a Sheet URL is needed → "Google Sheet URL" box → **Scan Sheet QR Code**; why
+  the Web App URL is needed → "Apps Script Web App URL" box → **Scan Web App QR Code**; then a
+  single action button (MicroTasking **Update Tasks**, ActiveTasks **Sync Lists**) and its status
+  message. Both scan buttons open the same scanner and route the result by content
+  (`parseSetupQr`), never by which button was pressed.
+- **Onboarding page** (`scripts/generate_install_page.py`): the two boxes (Sheet URL, Web App URL)
+  become one **Connection code** box, with the "set sharing to Anyone with the link" instruction
+  removed. Validation flags the two common mix-ups: the Apps Script *editor* address
+  (`…/home/projects/…/edit`) and a `/dev` test URL, and now a code with no `key=`. It stays the one
+  setup page for both apps; ActiveTasks's install page links to it rather than duplicating the
+  generator.
+- **Getting the code out of the Sheet**: new menu items **MicroTasking → Show connection code**
+  (a dialog with the ready-to-paste code, or "Deploy the Web App first" if not yet deployed) and
+  **Reset connection code**. The dialog builds the code from `ScriptApp.getService().getUrl()`
+  plus the stored key. (Whether `getUrl()` reliably returns the `/exec` URL — versus `/dev` —
+  needs verifying at build time; the fallback is showing the key alone and the page taking URL and
+  key in two boxes.)
+- **The `/exec` URL runs the *deployed version*, not the saved code.** Every script change
+  (including all the new actions here) needs each user to redeploy: Deploy → Manage deployments →
+  ✏️ → Version: **New version** → Deploy. Choosing *New deployment* instead would change the URL
+  and invalidate every QR. `hello`'s `apiVersion` exists for this: an app that gets `hello` back
+  as `unknown_action` (an apiVersion-1 script) or an `apiVersion` below what a feature needs shows
+  "Your Sheet's script is out of date — redeploy it" with those steps, and keeps working with
+  whatever the old script does support (v1: referral write-back only, no key check, no
+  `getTasks`).
+- **Legacy fallback**: an app holding only a Sheet URL (no connection code) uses the old
+  xlsx/gviz read path. MicroTasking works read-only that way; ActiveTasks needs a connection code (it
+  cannot work without priorities).
 
 ## Versioning
 - Version string shape: **`major.minor.feature-build`**, e.g. `0.1.8-2`.
@@ -322,6 +600,18 @@ deliberate — just do the task immediately.
 - External task source: exact periodic sync interval (e.g. daily?) and Google Cloud API key
   setup steps (project creation, Sheets API enablement, Android app restriction) — see
   "External task source" section above for the rest (now finalized).
+- Task referral to ActiveTasks: exact touch-axis mapping and the resulting priority formula weighting
+  are a first proposal, not user-validated — revisit once there's a feel for how it ranks in
+  practice (ActiveTasks's existing `important*2 + urgency` note says the same about its old boolean
+  formula). Whether the warning-only protected range actually blocks a script running "Execute
+  as: Me" the way intended, or needs a different protection setup — verify during
+  implementation. Failure-state UX when the referral write-back call fails (offline, Web App
+  misconfigured/undeployed, etc.).
+- Sheet connection & API: whether `ScriptApp.getService().getUrl()` reliably returns the `/exec`
+  URL for "Show connection code" (fallback described in that section); exact layout of the new
+  Add task / Delete from Sheet / Upload-to-Sheet actions; whether a lost/rotated key needs
+  anything friendlier than "scan the new QR"; whether an offline write queue is worth adding
+  (none in this version).
 - QR install/update: where the APK is hosted (e.g. GitHub Releases) and how the QR content
   gets generated/kept in sync with the latest build.
 - Max concurrent tasks default value and whether it's adjustable per-category or global only.

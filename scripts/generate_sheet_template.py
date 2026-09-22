@@ -33,6 +33,10 @@ README_CONTENT = [
     [""],
     ["Welcome to your MicroTasking Task Pool spreadsheet!"],
     [""],
+    ["TWO APPS SHARE THIS SHEET:"],
+    ["   - MicroTasking (Android): periodically prompts you with a random task from the tabs below, pulled from your checked/enabled rows."],
+    ["   - ActiveTasks (Android, optional companion app): a traditional to-do list. It only shows tasks you've explicitly referred to it from MicroTasking's task queue ('Refer to ActiveTasks') - it does not mirror every row in this sheet. See section 4 below if you use it."],
+    [""],
     ["HOW TO USE THIS SPREADSHEET:"],
     [""],
     ["1. CATEGORIES (TABS):"],
@@ -49,7 +53,12 @@ README_CONTENT = [
     ["3. SYNCING WITH THE APP:"],
     ["   - Set Share permissions to 'Anyone with the link can view'."],
     ["   - Paste your Sheet URL into the onboarding page to generate your custom QR code."],
-    ["   - In the MicroTasking app, tap Settings -> Import External Task Pool -> Scan QR Code."],
+    ["   - In the MicroTasking app, tap Settings -> Google Sheet Connection -> Scan Sheet QR Code."],
+    [""],
+    ["4. REFERRING A TASK TO ACTIVETASKS (OPTIONAL):"],
+    ["   - Only needed if you also use the ActiveTasks companion app. In this Sheet's Extensions -> Apps Script editor: Deploy -> New deployment -> Web app -> Execute as Me, Who has access Anyone with the link -> Deploy."],
+    ["   - Paste the resulting URL into both apps' Settings ('Apps Script Web App URL')."],
+    ["   - This adds two hidden columns (Importance, Urgency) to each task tab - don't unhide or edit them by hand, both apps manage them."],
 ]
 
 HEADER_FONT = Font(bold=True)
