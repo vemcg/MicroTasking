@@ -157,12 +157,40 @@ Next work session: make onboarding, import, the spreadsheet template, persistenc
    - Out of scope for this item: renaming/deleting tabs through the API, editing an existing
      row's text through the API, an offline write queue, per-user sign-in (all noted in the SPEC).
 
-10. **Harden against user edits to the shared Sheet** — *not started, scoped 2026-09-22 at the
-    user's request: "make it very hard for user input to break either app."* Full write-up lives in
-    ActiveTasks's `PUNCH_LIST.md` item 4 (that side is where it currently bites - a renamed
-    description orphans a stuck, un-dismissable duplicate card there, and a renamed tab makes the
-    orphan permanently unreachable). Confirmed while scoping this: MicroTasking's own pool already
-    handles a description/tab rename cleanly (`mergeImportedManagedTasks` rebuilds from the current
-    import every sync, so a stale id is simply dropped, not orphaned) - nothing to fix here today,
-    but the real fix (a stable server-assigned row id instead of raw description text, item 9
-    above) is shared infrastructure, so keep both PUNCH_LISTs in sync as it's designed.
+10. **Harden against user edits to the shared Sheet** — *MicroTasking's side implemented
+    2026-09-22, branch `sheet-surrogate-keys` (the same branch as item 9's app-side taskId work
+    above - see that item for what it depends on).* Full write-up lives in ActiveTasks's
+    `PUNCH_LIST.md` item 4 (that side is where the headline bug bites - a renamed description
+    orphans a stuck, un-dismissable duplicate card there, and a renamed tab makes the orphan
+    permanently unreachable). Confirmed while originally scoping this: MicroTasking's own pool
+    already handled a description/tab rename cleanly on its own (`mergeImportedManagedTasks`
+    rebuilds from the current import every sync, so a stale id is simply dropped, not orphaned) -
+    the two gaps actually fixed here are narrower ones the broader "audit other
+    user-editable-Sheet-input paths" ask in ActiveTasks's write-up turned up, both real for
+    MicroTasking too:
+    - **Duplicate-id crash risk.** The Task Pool screen keys its `LazyColumn` by `ManagedTask.id`
+      (`items(visibleTasks, key = { it.id })`) with no de-dup guard - the same bug class
+      `readTaskQueue`'s `.distinctBy` already protects the queue against. A not-yet-repaired
+      sheet's legacy `external-<category>-<description>` id collides if two rows share text; even
+      a repaired sheet's Task ID column can briefly hold a copy/paste duplicate before the
+      script's own dedupe catches up (item 9's `ensureTaskIds_`). Fixed: `mergeImportedManagedTasks`
+      now `.distinctBy { it.id }`s its output, first occurrence wins - a transient sheet-side
+      duplicate degrades to "one row temporarily invisible" instead of crashing every screen that
+      renders the pool.
+    - **Formula injection via hand-typing.** A user typing something that starts with `=` into
+      Description/Link gets it silently evaluated by Sheets into a wrong, confusing value neither
+      app can ever recover the literal text from. Fixed in `populate_google_sheet.js`:
+      `ensurePlainTextDescriptions_` pre-formats columns B/C as Plain Text (`setNumberFormat("@")`)
+      on tab creation and on every "Repair headers & triggers" run, so future typing is always
+      stored literally. Forward-only, same caveat as the script's existing `createRow`
+      literal-text protection - it can't retroactively fix a cell that already evaluated.
+    - 1 new Kotlin test (`mergeImportedManagedTasks_duplicateIdInTheImportCollapsesToOne`), 64
+      total pass. Script side verified against the same hand-built fake `SpreadsheetApp` harness
+      as item 9 (not committed - see that item).
+    - **Not done, still dangling** (see item 9's own "not yet built" list, which this doesn't
+      shrink): the v2 wire contract itself (`hello`/`getTasks`/`key=` auth/`createRow` etc.) and
+      categoryId consumption by either app - a *tab* rename is still not end-to-end safe, only a
+      *description* rename is, once a sheet has been repaired to have Task IDs. Also still open:
+      no Node test harness for the script (item 9 Phase 1 step 7), and whether ActiveTasks added
+      the equivalent `LazyColumn` de-dup guard + a way to clear a permanently-stuck item is that
+      session's own call - not re-verified here.

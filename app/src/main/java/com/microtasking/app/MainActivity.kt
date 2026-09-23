@@ -311,6 +311,12 @@ fun MicroTaskingApp(
     var savedMaxQueueSize by remember { mutableIntStateOf(maxQueueSize) }
     var savedSheetUrl by remember { mutableStateOf(externalSheetUrl) }
     var savedWebAppUrl by remember { mutableStateOf(webAppUrl) }
+    // Hoisted out of SettingsScreen (not just a local `remember` there) so it survives the round
+    // trip through the full-screen QR scanner: showingQrScanner swaps SettingsScreen out of
+    // composition entirely, so anything only `remember`ed inside it resets on the way back -
+    // sheetUrl/webAppUrl already avoid that by being hoisted the same way. Same smart-default as
+    // before: open "Google Sheet Connection" only for a not-yet-configured install.
+    var settingsOpenSection by remember { mutableStateOf(if (savedSheetUrl.isBlank()) "Google Sheet Connection" else "") }
     var referralInFlightTaskId by remember { mutableStateOf<String?>(null) }
     var referralErrorMessage by remember { mutableStateOf<String?>(null) }
     var showingReferralMatrixFor by remember { mutableStateOf<String?>(null) }
@@ -696,6 +702,8 @@ fun MicroTaskingApp(
             importMessage = sheetImportMessage,
             backgroundPromptsRunning = backgroundPromptsRunning,
             vacationMode = vacationMode,
+            openSection = settingsOpenSection,
+            onOpenSectionChanged = { settingsOpenSection = it },
             onOpenMyTasks = { showingMyTasks = true },
             onOpenTaskPool = { showingTaskPool = true },
             onOpenQrScanner = { showingQrScanner = true },
@@ -1245,6 +1253,13 @@ fun SettingsScreen(
     importMessage: String? = null,
     backgroundPromptsRunning: Boolean,
     vacationMode: Boolean,
+    // Accordion: at most one section open at a time. "" means all collapsed. Hoisted by the
+    // caller (not a local `remember` here) so it survives the round trip through the full-screen
+    // QR scanner, which swaps this whole composable out and back in - a scan would otherwise
+    // reset it to its default every time, which looked like the section "instantly collapsing"
+    // right when you needed it open to scan the second code.
+    openSection: String,
+    onOpenSectionChanged: (String) -> Unit,
     onOpenMyTasks: () -> Unit,
     onOpenTaskPool: () -> Unit,
     onOpenQrScanner: () -> Unit,
@@ -1262,11 +1277,6 @@ fun SettingsScreen(
     var maxQueueSize by remember { mutableStateOf(initialMaxQueueSize.toString()) }
     var sheetUrl by remember { mutableStateOf(initialSheetUrl) }
     var webAppUrl by remember { mutableStateOf(initialWebAppUrl) }
-    // Accordion: at most one section open at a time. "" means all collapsed. Google Sheet
-    // Connection opens by default only for a not-yet-configured install (no Sheet URL saved
-    // yet) - once it's set up, Task Categories/Prompting Schedule are the ones someone's more
-    // likely to come back and change, so nothing forces itself open over them.
-    var openSection by remember { mutableStateOf(if (initialSheetUrl.isBlank()) "Google Sheet Connection" else "") }
     val focusManager = LocalFocusManager.current
 
     @Composable
@@ -1275,7 +1285,7 @@ fun SettingsScreen(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable { openSection = if (expanded) "" else title },
+                .clickable { onOpenSectionChanged(if (expanded) "" else title) },
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {

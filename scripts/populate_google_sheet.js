@@ -351,9 +351,24 @@ function applyCategoryTabHeader_(sheet) {
   sheet.setColumnWidth(1, 40);
   sheet.setColumnWidth(2, 500);
   sheet.setColumnWidth(3, 250);
+  ensurePlainTextDescriptions_(sheet);
   ensureReferralColumns_(sheet);
   ensureTaskIds_(sheet);
   ensureCategoryId_(sheet);
+}
+
+/**
+ * Hardening (PUNCH_LIST "Harden against user edits to the shared Sheet"): pre-formats columns B
+ * (Description) and C (Link) as Plain Text, so typing something that looks like a formula (e.g.
+ * "=1+1") is stored as that literal text instead of Sheets silently evaluating it into a
+ * confusing, wrong value that neither app can ever recover the original text from. Only protects
+ * *future* typing - it can't retroactively fix a cell that already evaluated a formula (the
+ * result is already computed and stored; re-typing the cell is the only fix for that one).
+ * Idempotent - `setNumberFormat` never touches existing cell values, only how new input into that
+ * cell is interpreted, so this is safe to re-run on a tab of real data at any time.
+ */
+function ensurePlainTextDescriptions_(sheet) {
+  sheet.getRange("B2:C").setNumberFormat("@");
 }
 
 /**
@@ -480,8 +495,10 @@ function repairSheet_() {
     if (sheet.getName() === "README") return;
     if (String(sheet.getRange("B1").getValue()).trim() === "Description") {
       // Header already present - still make sure a tab created before the referral feature
-      // existed gets upgraded with the Importance/Urgency columns, and (DEV, sheet-surrogate-keys)
-      // before task ids existed gets those backfilled, with any copy/paste duplicate re-minted.
+      // existed gets upgraded with the Importance/Urgency columns, before task ids existed gets
+      // those backfilled (DEV, sheet-surrogate-keys), with any copy/paste duplicate re-minted,
+      // and before the plain-text hardening existed gets that applied too.
+      ensurePlainTextDescriptions_(sheet);
       ensureReferralColumns_(sheet);
       ensureTaskIds_(sheet);
       ensureCategoryId_(sheet);

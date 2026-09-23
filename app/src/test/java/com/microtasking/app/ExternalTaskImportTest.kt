@@ -146,6 +146,24 @@ class ExternalTaskImportTest {
         assertEquals(listOf("Real task"), parseExternalTaskCsv(csv, "X").map { it.description })
     }
 
+    // Hardening (PUNCH_LIST "Harden against user edits to the shared Sheet"): a duplicate id in
+    // the sheet import - a not-yet-repaired sheet where two rows share the same description text,
+    // or a taskId column briefly holding a copy/paste duplicate before the script's own dedupe
+    // catches up - must never reach a screen's LazyColumn as two entries with the same key, which
+    // is a hard crash (see the Task Pool screen's items(..., key = { it.id })).
+    @Test
+    fun mergeImportedManagedTasks_duplicateIdInTheImportCollapsesToOne() {
+        val imported = listOf(
+            ManagedTask("external-Cleaning-A", "A", "Cleaning", 5, false, enabled = true),
+            ManagedTask("external-Cleaning-A", "A", "Cleaning", 5, false, enabled = false)
+        )
+
+        val merged = mergeImportedManagedTasks(imported, existing = emptyList())
+
+        assertEquals("first occurrence wins, not two entries with the same id", 1, merged.size)
+        assertTrue("first occurrence's fields win", merged.single().enabled)
+    }
+
     @Test
     fun mergeImportedManagedTasks_sheetWinsEnabledButAppFlagsSurvive() {
         val existing = listOf(

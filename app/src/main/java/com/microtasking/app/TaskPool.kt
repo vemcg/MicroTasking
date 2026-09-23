@@ -175,6 +175,18 @@ fun writeManagedTasks(tasks: List<ManagedTask>): String = JSONArray().apply {
  * rename no longer looks like "old task dropped, new task appeared" the way it used to, and
  * neverSuggest/temporarilyUnavailable/referredAt above survive it. No logic change needed here for
  * that; it falls out of merging by id the way this function always has.
+ *
+ * Hardening (PUNCH_LIST "Harden against user edits to the shared Sheet"): [imported] is not
+ * trusted to have unique ids. Two sheet rows can share one - a not-yet-repaired sheet still uses
+ * the legacy `external-<category>-<description>` id, so two rows with identical text collide;
+ * even a repaired sheet's taskId column can briefly hold a duplicate right after a whole-row
+ * copy/paste, before the script's own dedupe (`onSheetEdit_`/a "Repair headers & triggers" run)
+ * catches up. Every screen that lists this pool keys a `LazyColumn` by [ManagedTask.id]
+ * (`items(visibleTasks, key = { it.id })` in the Task Pool screen) - an actual duplicate there is
+ * a hard crash, the same bug class `readTaskQueue`'s `.distinctBy` below already guards the queue
+ * against. The `distinctBy` at the end here is that same guard for the pool itself: first
+ * occurrence wins, so a transient sheet-side duplicate degrades to "one of the two rows is
+ * temporarily invisible" instead of crashing every screen that renders the pool.
  */
 fun mergeImportedManagedTasks(
     imported: List<ManagedTask>,
@@ -190,9 +202,9 @@ fun mergeImportedManagedTasks(
             referredAt = prior.referredAt
         )
     }
-    return reconciled + existing.filter { task ->
+    return (reconciled + existing.filter { task ->
         task.id.startsWith("custom-") && task.category in authoritativeCategories
-    }
+    }).distinctBy { it.id }
 }
 
 /**
