@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 Vern McGeorge. All rights reserved.
+# Updated 2026-09-24, after version v0.2.0-78 sheet-surrogate-keys 2026-09-23
 """Builds the Google Sheets import template (one README tab + one tab per category) from
 content/tasks.json.
 
@@ -24,7 +25,7 @@ from openpyxl.worksheet.hyperlink import Hyperlink
 INVALID_SHEET_TITLE_CHARS = str.maketrans({c: "-" for c in "/\\?*[]:"})
 
 # Origin version of this template. Keep in sync with buildVersionBase in app/build.gradle.kts.
-TEMPLATE_VERSION = "0.2.0"
+TEMPLATE_VERSION = "0.2.1"
 
 # Keep this text in sync with readmeData in scripts/populate_google_sheet.js.
 README_CONTENT = [

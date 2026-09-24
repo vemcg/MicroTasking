@@ -40,20 +40,32 @@ fun parseSetupQr(scannedText: String): SetupQrPayload {
  * a row index, since rows shift under the bound script's delete-row-on-empty-description
  * behavior (see `onSheetEdit_` in scripts/populate_google_sheet.js). Matches this app's existing
  * `external-<category>-<description>` id convention.
+ *
+ * DEV (sheet-surrogate-keys): every call below also accepts/reads the Sheet's `taskId`
+ * (`ensureTaskIds_`/`findRowByTaskId_` in the script) when one is available, preferring it over
+ * `(category, description)` - the whole point being that a rename or a move to a different tab
+ * doesn't change which row gets found. Falls back to the legacy text-based path automatically
+ * whenever a task doesn't have one yet (a sheet not repaired to have the column).
  */
 object WebAppClient {
     private const val CONNECT_TIMEOUT_MS = 15_000
     private const val READ_TIMEOUT_MS = 15_000
 
-    /** `"<category>|<description>"` - the row-identity key used throughout this file and TaskPool.refreshReferralState. */
+    /** `"<category>|<description>"` - the legacy row-identity key, used when a task has no [ManagedTask.taskId] yet. */
     fun rowKey(category: String, description: String): String = "$category|$description"
 
     /**
      * Writes this task's referral (importance/urgency in `[0, 1]`) to its Sheet row. Called the
      * instant the Eisenhower touch is confirmed - on success the caller stamps
      * [ManagedTask.referredAt] locally right away rather than waiting for the next sync.
+     *
+     * [taskId] (DEV, sheet-surrogate-keys), when non-null, is sent alongside category/description
+     * and takes priority server-side (see doPost's row resolution) - so the write still lands on
+     * the right row even if category/description are stale from before a rename.
      */
-    fun setPriority(webAppUrl: String, category: String, description: String, importance: Double, urgency: Double): Result<Unit> =
+    fun setPriority(
+        webAppUrl: String, category: String, description: String, importance: Double, urgency: Double, taskId: String? = null
+    ): Result<Unit> =
         post(
             webAppUrl,
             JSONObject().apply {
@@ -62,21 +74,23 @@ object WebAppClient {
                 put("description", description)
                 put("importance", importance.coerceIn(0.0, 1.0))
                 put("urgency", urgency.coerceIn(0.0, 1.0))
+                if (taskId != null) put("taskId", taskId)
             }
         ).map { }
 
     /**
      * Clears a row's Importance/Urgency (ActiveTasks's "Complete (for now)" - included here for
      * completeness/testing even though this app's own UI doesn't trigger it; ActiveTasks calls the
-     * same endpoint directly).
+     * same endpoint directly). [taskId]: see [setPriority].
      */
-    fun clearPriority(webAppUrl: String, category: String, description: String): Result<Unit> =
+    fun clearPriority(webAppUrl: String, category: String, description: String, taskId: String? = null): Result<Unit> =
         post(
             webAppUrl,
             JSONObject().apply {
                 put("action", "clearPriority")
                 put("category", category)
                 put("description", description)
+                if (taskId != null) put("taskId", taskId)
             }
         ).map { }
 
@@ -101,7 +115,12 @@ object WebAppClient {
         buildSet {
             for (i in 0 until rows.length()) {
                 val row = rows.getJSONObject(i)
-                add(rowKey(row.getString("category"), row.getString("description")))
+                // DEV (sheet-surrogate-keys): prefer the row's taskId when the script reports one
+                // (matches TaskPool.refreshReferralState's own preference on the local side); a
+                // row from a sheet not yet repaired to have task ids reports it as JSON null, so
+                // this falls back to the legacy text-based key exactly as before.
+                val taskId = if (row.has("taskId") && !row.isNull("taskId")) row.getString("taskId") else null
+                add(taskId ?: rowKey(row.getString("category"), row.getString("description")))
             }
         }
     }

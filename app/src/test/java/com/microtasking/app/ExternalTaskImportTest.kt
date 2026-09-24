@@ -93,6 +93,48 @@ class ExternalTaskImportTest {
         assertEquals("external-Cleaning-Wipe the counters", first.id)
     }
 
+    // DEV (sheet-surrogate-keys): a "Task ID" column, matched by header text like Description/Link.
+
+    @Test
+    fun parseExternalTaskCsv_readsTaskIdColumnAndBuildsIdFromIt() {
+        val csv = """
+            TRUE,Description,Link,Task ID
+            TRUE,Wipe the counters,,uuid-123
+        """.trimIndent()
+
+        val task = parseExternalTaskCsv(csv, "Cleaning").single()
+
+        assertEquals("uuid-123", task.taskId)
+        assertEquals("external-uuid-123", task.id)
+    }
+
+    @Test
+    fun parseExternalTaskCsv_noTaskIdColumnFallsBackToLegacyTextId() {
+        val csv = """
+            TRUE,Description,Link
+            TRUE,Wipe the counters,
+        """.trimIndent()
+
+        val task = parseExternalTaskCsv(csv, "Cleaning").single()
+
+        assertEquals(null, task.taskId)
+        assertEquals("external-Cleaning-Wipe the counters", task.id)
+    }
+
+    @Test
+    fun parseExternalTaskCsv_idSurvivesADescriptionRenameWhenTaskIdIsPresent() {
+        val before = parseExternalTaskCsv(
+            "TRUE,Description,Link,Task ID\nTRUE,Wipe the counters,,uuid-123", "Cleaning"
+        ).single()
+        // Same task id, reworded description - simulates editing the Sheet row by hand.
+        val after = parseExternalTaskCsv(
+            "TRUE,Description,Link,Task ID\nTRUE,Wipe down the kitchen counters,,uuid-123", "Cleaning"
+        ).single()
+
+        assertEquals("the id is the same task before and after the rename", before.id, after.id)
+        assertEquals("Wipe down the kitchen counters", after.description)
+    }
+
     @Test
     fun parseExternalTaskCsv_skipsRowsWithNoDescription() {
         val csv = """
@@ -102,6 +144,24 @@ class ExternalTaskImportTest {
         """.trimIndent()
 
         assertEquals(listOf("Real task"), parseExternalTaskCsv(csv, "X").map { it.description })
+    }
+
+    // Hardening (PUNCH_LIST "Harden against user edits to the shared Sheet"): a duplicate id in
+    // the sheet import - a not-yet-repaired sheet where two rows share the same description text,
+    // or a taskId column briefly holding a copy/paste duplicate before the script's own dedupe
+    // catches up - must never reach a screen's LazyColumn as two entries with the same key, which
+    // is a hard crash (see the Task Pool screen's items(..., key = { it.id })).
+    @Test
+    fun mergeImportedManagedTasks_duplicateIdInTheImportCollapsesToOne() {
+        val imported = listOf(
+            ManagedTask("external-Cleaning-A", "A", "Cleaning", 5, false, enabled = true),
+            ManagedTask("external-Cleaning-A", "A", "Cleaning", 5, false, enabled = false)
+        )
+
+        val merged = mergeImportedManagedTasks(imported, existing = emptyList())
+
+        assertEquals("first occurrence wins, not two entries with the same id", 1, merged.size)
+        assertTrue("first occurrence's fields win", merged.single().enabled)
     }
 
     @Test

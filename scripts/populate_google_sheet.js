@@ -1,5 +1,6 @@
 /**
  * Copyright (c) 2026 Vern McGeorge. All rights reserved.
+ * Updated 2026-09-24, after version v0.2.0-78 sheet-surrogate-keys 2026-09-23
  *
  * MicroTasking - One-Click Google Apps Script to Populate your Google Sheet
  *
@@ -34,7 +35,16 @@
  *
  * If "Running..." never ends: open Executions (clock icon, left sidebar) to see whether the run
  * actually finished or errored. onOpen / onSheetEdit_ / onGridChange_ / addRowCheckbox_ /
- * repairSheet_ are triggers or menu handlers - don't run them by hand.
+ * repairSheet_ / ensureTaskIds_ / ensureCategoryId_ are triggers or menu handlers - don't run
+ * them by hand.
+ *
+ * DEV BRANCH NOTE (sheet-surrogate-keys): this adds a persistent, random per-row "Task ID" (hidden
+ * column F) and a persistent per-tab "categoryId" (Sheet-level Developer Metadata, not a cell -
+ * see ensureCategoryId_) - see the exploration in chat: identity today is (tab name, description
+ * text), which breaks the moment either is edited by hand. Script-only so far: doGet/doPost, both
+ * apps, and the wire contract are untouched - this branch only generates and maintains the ids so
+ * they can be inspected/tested directly in a Sheet first (menu: "Dev: List task/category IDs").
+ * Not pushed to the shared template or any live deployment.
  *
  * MAINTAINER NOTE: this file is the source of truth and is pushed to the bound Apps Script
  * project of the shared template Sheet with `npm run push:sheet` (clasp). See .clasp.json.
@@ -43,7 +53,7 @@
  */
 
 // Origin version of this template. Keep in sync with buildVersionBase in app/build.gradle.kts.
-var TEMPLATE_VERSION = "0.2.0";
+var TEMPLATE_VERSION = "0.2.1";
 
 function setupMicroTaskingSheet() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -342,7 +352,24 @@ function applyCategoryTabHeader_(sheet) {
   sheet.setColumnWidth(1, 40);
   sheet.setColumnWidth(2, 500);
   sheet.setColumnWidth(3, 250);
+  ensurePlainTextDescriptions_(sheet);
   ensureReferralColumns_(sheet);
+  ensureTaskIds_(sheet);
+  ensureCategoryId_(sheet);
+}
+
+/**
+ * Hardening (PUNCH_LIST "Harden against user edits to the shared Sheet"): pre-formats columns B
+ * (Description) and C (Link) as Plain Text, so typing something that looks like a formula (e.g.
+ * "=1+1") is stored as that literal text instead of Sheets silently evaluating it into a
+ * confusing, wrong value that neither app can ever recover the original text from. Only protects
+ * *future* typing - it can't retroactively fix a cell that already evaluated a formula (the
+ * result is already computed and stored; re-typing the cell is the only fix for that one).
+ * Idempotent - `setNumberFormat` never touches existing cell values, only how new input into that
+ * cell is interpreted, so this is safe to re-run on a tab of real data at any time.
+ */
+function ensurePlainTextDescriptions_(sheet) {
+  sheet.getRange("B2:C").setNumberFormat("@");
 }
 
 /**
@@ -375,6 +402,73 @@ function ensureReferralColumns_(sheet) {
 }
 
 /**
+ * DEV (sheet-surrogate-keys): adds/repairs a hidden, warning-protected "Task ID" column (F) - a
+ * random, content-independent token stamped once per row and never recomputed, so a task keeps
+ * its identity across a description rename. Unlike Importance/Urgency, nothing reads this column
+ * yet (doGet/doPost are untouched on this branch); it only exists so the id-generation and
+ * dedupe behavior below can be tested directly in a Sheet.
+ *
+ * Idempotent, and safe to re-run any time: a blank cell (new row, or a tab that predates this
+ * column) gets a fresh id; an id that turns out to be duplicated - the case this branch exists to
+ * test, since a whole-row copy/paste carries the hidden cell along with the visible ones - is
+ * re-minted on every row after the first that shares it, so two rows never end up meaning "the
+ * same task" by accident.
+ */
+function ensureTaskIds_(sheet) {
+  sheet.getRange("F1").setValue("Task ID");
+  sheet.getRange("F1").setFontWeight("bold").setHorizontalAlignment("center");
+  if (!sheet.isColumnHiddenByUser(6)) sheet.hideColumns(6);
+
+  var idRange = sheet.getRange("F2:F");
+  var alreadyProtected = sheet.getProtections(SpreadsheetApp.ProtectionType.RANGE).some(function (p) {
+    return p.getRange().getA1Notation() === idRange.getA1Notation();
+  });
+  if (!alreadyProtected) {
+    idRange.protect()
+      .setDescription("MicroTasking/ActiveTasks task identity - edit via the apps, not by hand")
+      .setWarningOnly(true);
+  }
+
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return;
+  var descriptions = sheet.getRange(2, 2, lastRow - 1, 1).getValues();
+  var ids = sheet.getRange(2, 6, lastRow - 1, 1).getValues();
+  var seen = {};
+  var changed = false;
+  for (var i = 0; i < ids.length; i++) {
+    if (String(descriptions[i][0]).trim().length === 0) continue; // no description yet - onSheetEdit_ stamps an id the moment one lands
+    var id = String(ids[i][0]).trim();
+    if (!id || Object.prototype.hasOwnProperty.call(seen, id)) {
+      id = Utilities.getUuid();
+      ids[i][0] = id;
+      changed = true;
+    }
+    seen[id] = true;
+  }
+  if (changed) sheet.getRange(2, 6, ids.length, 1).setValues(ids);
+}
+
+/**
+ * DEV (sheet-surrogate-keys): the TAB's own persistent id, as opposed to ensureTaskIds_'s per-row
+ * ids - stored as Sheet-level Developer Metadata rather than a cell. Metadata isn't shown
+ * anywhere in the Sheets UI and can't be pasted over, which fits "the tab's own identity" better
+ * than a cell would (row 1 of column F is already a literal header label, "Task ID", matching
+ * Description/Link/Importance/Urgency - a tab-level fact doesn't belong on that same row, and
+ * would be exactly as vulnerable to an accidental paste as the row ids above). Idempotent.
+ */
+function ensureCategoryId_(sheet) {
+  var existing = sheet.getDeveloperMetadata().filter(function (m) { return m.getKey() === "categoryId"; });
+  if (existing.length > 0) return;
+  sheet.addDeveloperMetadata("categoryId", Utilities.getUuid());
+}
+
+/** DEV (sheet-surrogate-keys): the tab's id from ensureCategoryId_, or null if not stamped yet. */
+function categoryId_(sheet) {
+  var entries = sheet.getDeveloperMetadata().filter(function (m) { return m.getKey() === "categoryId"; });
+  return entries.length > 0 ? entries[0].getValue() : null;
+}
+
+/**
  * Adds the "MicroTasking" menu. onOpen is a simple trigger, so this alone needs no authorization -
  * the menu items it points at do, the first time they run. This is the reliable entry point in a
  * *copy* of the template (installable triggers and prior authorization never survive File → Make
@@ -385,6 +479,9 @@ function onOpen() {
     .createMenu("MicroTasking")
     .addItem("Repair headers & triggers", "repairSheet_")
     .addItem("Rebuild everything from template", "setupMicroTaskingSheet")
+    .addSeparator()
+    .addItem("Dev: List task/category IDs", "listIds_")
+    .addItem("Dev: Self-test taskId lookup", "selfTestTaskIdLookup_")
     .addToUi();
 }
 
@@ -399,8 +496,13 @@ function repairSheet_() {
     if (sheet.getName() === "README") return;
     if (String(sheet.getRange("B1").getValue()).trim() === "Description") {
       // Header already present - still make sure a tab created before the referral feature
-      // existed gets upgraded with the Importance/Urgency columns.
+      // existed gets upgraded with the Importance/Urgency columns, before task ids existed gets
+      // those backfilled (DEV, sheet-surrogate-keys), with any copy/paste duplicate re-minted,
+      // and before the plain-text hardening existed gets that applied too.
+      ensurePlainTextDescriptions_(sheet);
       ensureReferralColumns_(sheet);
+      ensureTaskIds_(sheet);
+      ensureCategoryId_(sheet);
       return;
     }
     applyCategoryTabHeader_(sheet);
@@ -409,6 +511,144 @@ function repairSheet_() {
   ss.toast(
     installed ? "Headers checked; edit triggers installed." : "Headers checked; edit triggers already set.",
     "MicroTasking", 5
+  );
+  // DEV (sheet-surrogate-keys): prove the taskId-based doPost path actually works every time
+  // headers/ids get repaired, without a separate manual step.
+  selfTestTaskIdLookup_();
+}
+
+/** DEV (sheet-surrogate-keys): {sheet, row, taskId} for the first task row found with a non-blank id, or null. */
+function findAnyTaskIdRow_() {
+  var sheets = SpreadsheetApp.getActiveSpreadsheet().getSheets();
+  for (var s = 0; s < sheets.length; s++) {
+    var sheet = sheets[s];
+    if (sheet.getName() === "README") continue;
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 2) continue;
+    var ids = sheet.getRange(2, 6, lastRow - 1, 1).getValues();
+    for (var i = 0; i < ids.length; i++) {
+      var id = String(ids[i][0]).trim();
+      if (id) return { sheet: sheet, row: i + 2, taskId: id };
+    }
+  }
+  return null;
+}
+
+/**
+ * DEV (sheet-surrogate-keys). Proves the taskId-based doPost path (findRowByTaskId_) actually
+ * works, entirely in-process - no deployment, no curl, no HTTP round trip. doPost is just a
+ * regular function; calling it directly with a synthetic {postData: {contents: ...}} object,
+ * exactly the shape a real Web App request arrives in, exercises the real function body, not a
+ * reimplementation. Runs automatically at the end of repairSheet_, and separately from the "Dev:
+ * Self-test taskId lookup" menu item.
+ *
+ * Non-destructive: picks one existing task row, remembers its current importance/urgency exactly
+ * (blank or set - a genuinely already-referred row must come back exactly as it was, not wiped),
+ * writes test values via doPost using that row's taskId alongside a DELIBERATELY WRONG
+ * category/description - this is the actual property being proven, that taskId alone resolves
+ * the row even when the category/description passed alongside it is stale or wrong, which is
+ * exactly what a rename leaves you with - verifies the write landed on that exact physical row,
+ * then restores the original values. Also checks that a made-up taskId is correctly rejected
+ * rather than silently matching something.
+ */
+function selfTestTaskIdLookup_() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var testRow = findAnyTaskIdRow_();
+  if (!testRow) {
+    ss.toast(
+      "Self-test skipped: no task row with an id yet to test against.",
+      "MicroTasking (dev) self-test", 6
+    );
+    return;
+  }
+
+  var sheet = testRow.sheet;
+  var row = testRow.row;
+  var taskId = testRow.taskId;
+  var original = sheet.getRange(row, 4, 1, 2).getValues()[0]; // [importance, urgency], "" if blank
+  var wasBlank = original[0] === "" && original[1] === "";
+  var results = [];
+
+  function callDoPost(body) {
+    return JSON.parse(doPost({ postData: { contents: JSON.stringify(body) } }).getContent());
+  }
+
+  // 1. Write by taskId, with a deliberately wrong category/description alongside it - the row
+  // must still be found correctly, since taskId is what a rename can't disturb.
+  var writeResponse = callDoPost({
+    action: "setPriority",
+    taskId: taskId,
+    category: "__self-test-wrong-category__",
+    description: "__self-test-wrong-description__",
+    importance: 0.42,
+    urgency: 0.17
+  });
+  var afterWrite = sheet.getRange(row, 4, 1, 2).getValues()[0];
+  var writeOk = writeResponse.ok && Math.abs(afterWrite[0] - 0.42) < 1e-9 && Math.abs(afterWrite[1] - 0.17) < 1e-9;
+  results.push((writeOk ? "PASS" : "FAIL") + " - write by taskId, wrong category/description supplied too");
+
+  // 2. Restore the row's original values exactly, whatever they were - never leaves real data
+  // changed, whether the row was blank or already genuinely referred.
+  if (wasBlank) {
+    sheet.getRange(row, 4, 1, 2).setValues([["", ""]]);
+  } else {
+    callDoPost({ action: "setPriority", taskId: taskId, importance: Number(original[0]), urgency: Number(original[1]) });
+  }
+  var afterRestore = sheet.getRange(row, 4, 1, 2).getValues()[0];
+  var restoreOk = wasBlank
+    ? (afterRestore[0] === "" && afterRestore[1] === "")
+    : (Math.abs(afterRestore[0] - Number(original[0])) < 1e-9 && Math.abs(afterRestore[1] - Number(original[1])) < 1e-9);
+  results.push((restoreOk ? "PASS" : "FAIL") + " - original values restored");
+
+  // 3. A made-up taskId should fail cleanly, not silently match something.
+  var bogusResponse = callDoPost({ action: "setPriority", taskId: "self-test-bogus-id-does-not-exist", importance: 0.5, urgency: 0.5 });
+  results.push((!bogusResponse.ok ? "PASS" : "FAIL") + " - bogus taskId correctly rejected");
+
+  var allPass = results.every(function (r) { return r.indexOf("PASS") === 0; });
+  Logger.log("selfTestTaskIdLookup_ (" + sheet.getName() + " row " + row + "):\n" + results.join("\n"));
+  ss.toast(
+    (allPass ? "All 3 checks passed" : "SOME CHECKS FAILED - see Executions log") +
+      ". Tested against " + sheet.getName() + " row " + row + ".",
+    "MicroTasking (dev) self-test", 8
+  );
+}
+
+/**
+ * DEV (sheet-surrogate-keys), menu item only - not part of the Web App contract. Dumps every
+ * tab's categoryId and each row's task id to the Executions log, and toasts a one-line summary
+ * including a duplicate count, so ensureTaskIds_/ensureCategoryId_ can actually be inspected -
+ * both are otherwise invisible (hidden column, Developer Metadata). Useful sequence to test the
+ * copy/paste case: run this, copy a whole row (right-click the row number -> Copy, not just the
+ * visible cells) into a blank row, run "Repair headers & triggers" (or just edit the sheet, since
+ * onSheetEdit_ should already have self-healed it), then run this again and confirm the
+ * duplicate count is still 0 and the pasted row's id differs from the row it was copied from.
+ */
+function listIds_() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var totalRows = 0;
+  var duplicates = 0;
+  ss.getSheets().forEach(function (sheet) {
+    if (sheet.getName() === "README") return;
+    Logger.log("=== " + sheet.getName() + " (categoryId=" + categoryId_(sheet) + ") ===");
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 2) return;
+    var descriptions = sheet.getRange(2, 2, lastRow - 1, 1).getValues();
+    var ids = sheet.getRange(2, 6, lastRow - 1, 1).getValues();
+    var seen = {};
+    for (var i = 0; i < ids.length; i++) {
+      var description = String(descriptions[i][0]).trim();
+      if (!description) continue;
+      var id = String(ids[i][0]).trim();
+      totalRows++;
+      if (id && Object.prototype.hasOwnProperty.call(seen, id)) duplicates++;
+      seen[id] = true;
+      Logger.log("  row " + (i + 2) + ": taskId=" + (id || "(blank!)") + "  " + description);
+    }
+  });
+  ss.toast(
+    totalRows + " task row(s) checked, " + duplicates + " duplicate id(s) found. Full detail in " +
+      "Executions (clock icon, left sidebar).",
+    "MicroTasking (dev)", 8
   );
 }
 
@@ -493,6 +733,17 @@ function onSheetEdit_(e) {
     for (var i = 0; i < clearedRows.length; i++) {
       if (clearedRows[i] >= 2) sheet.deleteRow(clearedRows[i]);
     }
+    // DEV (sheet-surrogate-keys): a brand-new row just got its checkbox above - give it a task id too.
+    ensureTaskIds_(sheet);
+  }
+
+  // DEV (sheet-surrogate-keys): a paste that reached the hidden Task ID column (e.g. a whole-row
+  // copy, which carries hidden cells along even though they're never visibly selected) can
+  // duplicate a task id onto the pasted row - this is the exact scenario the branch exists to
+  // test. Repair it immediately rather than waiting for a manual "Repair headers & triggers".
+  // Idempotent, so it's harmless to also fire right after the branch above already ran.
+  if (range.getLastColumn() >= 6) {
+    ensureTaskIds_(sheet);
   }
 }
 
@@ -522,11 +773,22 @@ function addRowCheckbox_(sheet, row) {
  * referral to ActiveTasks": rows shift under onSheetEdit_'s delete-row-on-empty-description behavior,
  * so a cached row index would eventually point at the wrong row.
  *
+ * DEV (sheet-surrogate-keys), additive and backward-compatible: doGet now also returns each row's
+ * `taskId`/`categoryId` (see ensureTaskIds_/ensureCategoryId_ above), and doPost accepts an
+ * optional `taskId` that, when present, is used INSTEAD of category+description to find the row -
+ * see findRowByTaskId_. Neither app sends `taskId` yet, so every call today still takes the
+ * legacy (category, description) path unchanged; this only makes the id-based path available for
+ * whenever the apps are updated to use it.
+ *
  * See MicroTasking's SPEC.md "Sheet connection & API (Apps Script Web App)" and ActiveTasks's SPEC.md
  * "Referral bridge" for the two apps' side of this contract.
  */
 
-/** GET ?action=getPriorities -> {"ok":true,"rows":[{"category","description","importance","urgency"}, ...]} */
+/**
+ * GET ?action=getPriorities -> {"ok":true,"rows":[{"category","categoryId","description","taskId",
+ * "importance","urgency"}, ...]}. `taskId`/`categoryId` are null on a row/tab that predates
+ * ensureTaskIds_/ensureCategoryId_ and hasn't been repaired yet (DEV, sheet-surrogate-keys).
+ */
 function doGet(e) {
   var action = e && e.parameter && e.parameter.action;
   if (action !== "getPriorities") {
@@ -539,16 +801,22 @@ function doGet(e) {
       if (sheet.getName() === "README") return;
       var lastRow = sheet.getLastRow();
       if (lastRow < 2) return;
-      var values = sheet.getRange(2, 2, lastRow - 1, 4).getValues(); // B..E
+      // B..F, not just B..E, so taskId (F) rides along with the existing importance/urgency read
+      // in the same round trip (DEV, sheet-surrogate-keys).
+      var values = sheet.getRange(2, 2, lastRow - 1, 5).getValues(); // B..F
+      var categoryId = categoryId_(sheet);
       for (var i = 0; i < values.length; i++) {
         var description = String(values[i][0]).trim();
         var importance = values[i][2];
         var urgency = values[i][3];
+        var taskId = String(values[i][4]).trim();
         if (!description) continue;
         if (importance === "" && urgency === "") continue;
         rows.push({
           category: sheet.getName(),
+          categoryId: categoryId,
           description: description,
+          taskId: taskId || null,
           importance: importance === "" ? 0 : Number(importance),
           urgency: urgency === "" ? 0 : Number(urgency)
         });
@@ -561,19 +829,34 @@ function doGet(e) {
 }
 
 /**
- * POST body (JSON): {"action": "setPriority"|"clearPriority"|"deleteRow", "category", "description", ...}
+ * POST body (JSON): {"action": "setPriority"|"clearPriority"|"deleteRow", "category", "description",
+ * "taskId"?, ...}
  *  - setPriority: also "importance" (number 0-1), "urgency" (number 0-1). Written by MicroTasking
  *    on referral, and by ActiveTasks on re-triage.
  *  - clearPriority: blanks D/E for that row. ActiveTasks's "Complete (for now)".
  *  - deleteRow: removes the row entirely. ActiveTasks's "Fully complete".
+ *  - "taskId" (DEV, sheet-surrogate-keys): optional. When present, the row is found by
+ *    findRowByTaskId_ (scans every tab) and "category"/"description" are ignored entirely for
+ *    lookup purposes - so a rename or a move to a different tab since the caller last synced
+ *    doesn't matter. Omitted (every caller today), it's the unchanged legacy path:
+ *    findRowByDescription_ within the named tab.
  */
 function doPost(e) {
   try {
     var body = JSON.parse(e.postData.contents);
-    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(body.category);
-    if (!sheet) return jsonResponse_({ ok: false, error: "No tab named \"" + body.category + "\"" });
-    var row = findRowByDescription_(sheet, body.description);
-    if (row === -1) return jsonResponse_({ ok: false, error: "No row matching that description" });
+    var sheet, row;
+
+    if (body.taskId) {
+      var located = findRowByTaskId_(String(body.taskId).trim());
+      if (!located) return jsonResponse_({ ok: false, error: "No row with that task id" });
+      sheet = located.sheet;
+      row = located.row;
+    } else {
+      sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(body.category);
+      if (!sheet) return jsonResponse_({ ok: false, error: "No tab named \"" + body.category + "\"" });
+      row = findRowByDescription_(sheet, body.description);
+      if (row === -1) return jsonResponse_({ ok: false, error: "No row matching that description" });
+    }
 
     switch (body.action) {
       case "setPriority":
@@ -603,6 +886,27 @@ function findRowByDescription_(sheet, description) {
     if (String(values[i][0]).trim() === description) return i + 2;
   }
   return -1;
+}
+
+/**
+ * DEV (sheet-surrogate-keys): {sheet, row} (1-based) for the row whose Task ID column (F) matches
+ * `taskId`, or null. Scans every non-README tab, not just one named tab - the whole point of a
+ * task id is that it's still findable even if the row has moved to a different tab, or that tab
+ * has been renamed, since the caller last synced.
+ */
+function findRowByTaskId_(taskId) {
+  var sheets = SpreadsheetApp.getActiveSpreadsheet().getSheets();
+  for (var s = 0; s < sheets.length; s++) {
+    var sheet = sheets[s];
+    if (sheet.getName() === "README") continue;
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 2) continue;
+    var ids = sheet.getRange(2, 6, lastRow - 1, 1).getValues();
+    for (var i = 0; i < ids.length; i++) {
+      if (String(ids[i][0]).trim() === taskId) return { sheet: sheet, row: i + 2 };
+    }
+  }
+  return null;
 }
 
 function jsonResponse_(obj) {

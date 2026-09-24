@@ -24,7 +24,16 @@ data class ManagedTask(
     // a dedicated field, deliberately not a reuse of neverSuggest, which mergeImportedManagedTasks
     // below must instead *preserve* untouched across every re-sync. See SPEC.md
     // "Task referral to ActiveTasks".
-    val referredAt: Long? = null
+    val referredAt: Long? = null,
+    // DEV (sheet-surrogate-keys): the Sheet's hidden per-row "Task ID" (populate_google_sheet.js
+    // ensureTaskIds_) - null for a seed-/custom- task (no Sheet row at all), or an external- task
+    // from a sheet that hasn't been repaired to have the column yet. When present, [id] is built
+    // from it instead of category+description (see parseExternalTaskCsv), so a description
+    // rename no longer changes identity; refreshReferralState below and WebAppClient prefer it
+    // over the legacy category|description key the same way. Not yet used for category identity -
+    // a tab rename is a separate, not-yet-solved problem (needs categoryId, which nothing reads
+    // yet - see the Sheet script's ensureCategoryId_).
+    val taskId: String? = null
 )
 
 enum class TaskLifecycleState {
@@ -112,6 +121,7 @@ private fun managedTaskToJson(task: ManagedTask): JSONObject = JSONObject().appl
     put("temporarilyUnavailable", task.temporarilyUnavailable)
     put("neverSuggest", task.neverSuggest)
     put("referredAt", task.referredAt ?: JSONObject.NULL)
+    put("taskId", task.taskId ?: JSONObject.NULL)
 }
 
 private fun managedTaskFromJson(task: JSONObject): ManagedTask = ManagedTask(
@@ -125,7 +135,9 @@ private fun managedTaskFromJson(task: JSONObject): ManagedTask = ManagedTask(
     neverSuggest = task.getBoolean("neverSuggest"),
     // Absent on a queue/pool entry persisted by a build older than this field - treat that as
     // "not referred" (null), not a crash, same pattern optNullableLong already uses below.
-    referredAt = if (task.has("referredAt") && !task.isNull("referredAt")) task.getLong("referredAt") else null
+    referredAt = if (task.has("referredAt") && !task.isNull("referredAt")) task.getLong("referredAt") else null,
+    // DEV (sheet-surrogate-keys): same absent-on-an-older-build tolerance as referredAt above.
+    taskId = if (task.has("taskId") && !task.isNull("taskId")) task.getString("taskId") else null
 )
 
 fun readManagedTasks(json: String): List<ManagedTask> = runCatching {
@@ -156,6 +168,25 @@ fun writeManagedTasks(tasks: List<ManagedTask>): String = JSONArray().apply {
  * import never knows about it either way (Importance/Urgency aren't CSV columns, see SPEC.md
  * "Sheet connection & API"). It's [refreshReferralState] below, called separately against the Apps
  * Script Web App, that's actually authoritative for it.
+ *
+ * DEV (sheet-surrogate-keys): [ManagedTask.id] is taskId-based when the sheet has one
+ * (`parseExternalTaskCsv`), so this function's existing merge-by-[ManagedTask.id] already does the
+ * right thing once both the prior and freshly-imported task share that stable id - a description
+ * rename no longer looks like "old task dropped, new task appeared" the way it used to, and
+ * neverSuggest/temporarilyUnavailable/referredAt above survive it. No logic change needed here for
+ * that; it falls out of merging by id the way this function always has.
+ *
+ * Hardening (PUNCH_LIST "Harden against user edits to the shared Sheet"): [imported] is not
+ * trusted to have unique ids. Two sheet rows can share one - a not-yet-repaired sheet still uses
+ * the legacy `external-<category>-<description>` id, so two rows with identical text collide;
+ * even a repaired sheet's taskId column can briefly hold a duplicate right after a whole-row
+ * copy/paste, before the script's own dedupe (`onSheetEdit_`/a "Repair headers & triggers" run)
+ * catches up. Every screen that lists this pool keys a `LazyColumn` by [ManagedTask.id]
+ * (`items(visibleTasks, key = { it.id })` in the Task Pool screen) - an actual duplicate there is
+ * a hard crash, the same bug class `readTaskQueue`'s `.distinctBy` below already guards the queue
+ * against. The `distinctBy` at the end here is that same guard for the pool itself: first
+ * occurrence wins, so a transient sheet-side duplicate degrades to "one of the two rows is
+ * temporarily invisible" instead of crashing every screen that renders the pool.
  */
 fun mergeImportedManagedTasks(
     imported: List<ManagedTask>,
@@ -171,9 +202,9 @@ fun mergeImportedManagedTasks(
             referredAt = prior.referredAt
         )
     }
-    return reconciled + existing.filter { task ->
+    return (reconciled + existing.filter { task ->
         task.id.startsWith("custom-") && task.category in authoritativeCategories
-    }
+    }).distinctBy { it.id }
 }
 
 /**
@@ -184,22 +215,26 @@ fun mergeImportedManagedTasks(
  * (manual refresh + periodic background sync) - not from [chooseWeightedTask]/`tick`, which must
  * stay a fast local-only read with no network dependency of its own.
  *
- * [referredRowKeys] is the set of `"<category>|<description>"` keys the Web App reports as having
- * a non-empty Importance or Urgency (see [WebAppClient.RowKey] convention - row identity is
- * `(tab, description)`, not row index, since rows shift under the bound script's
- * delete-row-on-empty-description behavior). A task whose key isn't in the set gets
- * `referredAt = null` (covers "Complete (for now)" clearing it sheet-side); a task whose key *is*
- * in the set keeps its existing `referredAt` if already set (referral happened locally and this
- * call is just confirming it), or gets stamped with the current time if this is the first time
- * this client has observed it referred (e.g. a second device where the referral itself happened
- * elsewhere).
+ * [referredRowKeys] is the set of keys the Web App reports as having a non-empty Importance or
+ * Urgency: each entry is a row's `taskId` when the sheet has one (DEV, sheet-surrogate-keys - see
+ * [WebAppClient.getReferredRowKeys]), else the legacy `"<category>|<description>"` text key (see
+ * [WebAppClient.rowKey] - row identity is `(tab, description)`, not row index, since rows shift
+ * under the bound script's delete-row-on-empty-description behavior). Each local task's own key is
+ * computed the same way below, preferring [ManagedTask.taskId] when it has one, so matching is
+ * id-based (rename-proof) once both sides have one, and gracefully falls back to the old
+ * text-based key for a sheet not yet repaired to have task ids. A task whose key isn't in the set
+ * gets `referredAt = null` (covers "Complete (for now)" clearing it sheet-side); a task whose key
+ * *is* in the set keeps its existing `referredAt` if already set (referral happened locally and
+ * this call is just confirming it), or gets stamped with the current time if this is the first
+ * time this client has observed it referred (e.g. a second device where the referral itself
+ * happened elsewhere).
  */
 fun refreshReferralState(
     tasks: List<ManagedTask>,
     referredRowKeys: Set<String>,
     now: Long = System.currentTimeMillis()
 ): List<ManagedTask> = tasks.map { task ->
-    val key = "${task.category}|${task.description}"
+    val key = task.taskId ?: "${task.category}|${task.description}"
     when {
         key !in referredRowKeys -> if (task.referredAt != null) task.copy(referredAt = null) else task
         task.referredAt != null -> task
