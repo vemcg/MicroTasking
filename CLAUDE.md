@@ -34,7 +34,7 @@ auto-trigger the release workflow): `gh workflow run "Build & release APK" --ref
 - **Copyright-comment convention, from 2026-09-24 forward:** when editing a file that already
   carries this project's own `Copyright (c) <year> Vern McGeorge` header (not the Gradle wrapper's
   or `LICENSE`'s), add or update a line directly under it reading `Updated <date>, after version
-  <build version>` — `<build version>` is whatever "Last built version" above says *at the time of
+  <build version> <build branch> <build timestamp>` where `<build version>`,`<build branch>`, and `<build timestamp>` are whatever "Last built version" above says *at the time of
   the edit* (the most recent build that had already shipped, not one triggered by this edit, which
   hasn't happened yet). `<date>` is `YYYY-MM-DD`, matching this repo's existing dating convention
   in `PUNCH_LIST.md`/`SPEC.md`. Applies going forward only, to files actually touched for some

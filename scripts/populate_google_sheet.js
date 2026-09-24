@@ -1,5 +1,6 @@
 /**
  * Copyright (c) 2026 Vern McGeorge. All rights reserved.
+ * Updated 2026-09-24, after version v0.2.0-78 sheet-surrogate-keys 2026-09-23
  *
  * MicroTasking - One-Click Google Apps Script to Populate your Google Sheet
  *
@@ -52,7 +53,7 @@
  */
 
 // Origin version of this template. Keep in sync with buildVersionBase in app/build.gradle.kts.
-var TEMPLATE_VERSION = "0.2.0";
+var TEMPLATE_VERSION = "0.2.1";
 
 function setupMicroTaskingSheet() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
