@@ -25,6 +25,21 @@ Requires an Android SDK; `local.properties` (gitignored) must contain `sdk.dir=<
 Manually trigger a build for a non-`main` branch (pushes to other branches do **not**
 auto-trigger the release workflow): `gh workflow run "Build & release APK" --ref <branch>`.
 
+## Build tracking (user-requested convention, 2026-09-24)
+
+- **Last built version:** `v0.2.0-78` (branch `sheet-surrogate-keys`, built 2026-09-23). At the
+  start of every session, note this as the current known state before doing anything else. After
+  triggering a build and confirming it went live (`gh run list` / the new GitHub Release), update
+  this line to the new version/branch/date — don't leave it stale once a newer build exists.
+- **Copyright-comment convention, from 2026-09-24 forward:** when editing a file that already
+  carries this project's own `Copyright (c) <year> Vern McGeorge` header (not the Gradle wrapper's
+  or `LICENSE`'s), add or update a line directly under it reading `Updated <date>, after version
+  <build version>` — `<build version>` is whatever "Last built version" above says *at the time of
+  the edit* (the most recent build that had already shipped, not one triggered by this edit, which
+  hasn't happened yet). `<date>` is `YYYY-MM-DD`, matching this repo's existing dating convention
+  in `PUNCH_LIST.md`/`SPEC.md`. Applies going forward only, to files actually touched for some
+  other reason - not a retroactive pass over every file that currently carries the header.
+
 ## Architecture
 
 Almost everything Compose/UI-related lives in one large file, `MainActivity.kt` (the Activity
