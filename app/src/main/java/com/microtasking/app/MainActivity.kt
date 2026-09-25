@@ -877,19 +877,29 @@ fun MicroTaskingApp(
             )
         }
     } else {
+        // Read live off the clock/settings every recomposition (clockMillis ticking every second
+        // while foregrounded drives that), not from next_dispatch_epoch_ms - see
+        // windowOpensInMillis below for why.
+        val nowForWindow = LocalDateTime.now()
+        val startHourForWindow = (savedStartHour.toIntOrNull() ?: 9).coerceIn(0, 24)
+        val endHourForWindow = (savedEndHour.toIntOrNull() ?: 21).coerceIn(0, 24)
+        val isWithinWindowNow = isWithinActiveWindow(nowForWindow, startHourForWindow, endHourForWindow)
         TaskPromptScreen(
             taskEntries = visibleTaskEntries,
             streak = streak,
             maxQueueSize = savedMaxQueueSize,
             promptsPerDay = savedPromptsPerDay.toIntOrNull() ?: 0,
             nextDispatchEpoch = nextDispatchEpoch,
+            // DEFECTS.md item 6: next_dispatch_epoch_ms also doubles as the pacing interval a
+            // forced tap outside the window arms for the background alarm (fixedDispatchIntervalMillis
+            // - a fixed cadence unrelated to window-open timing, per its own doc comment), so it's
+            // not safe to read for "when does the window open" any more. This is computed
+            // independently and live instead, exactly like isWithinWindowNow already is, so no
+            // forced tap can throw it off.
+            windowOpensInMillis = if (isWithinWindowNow) null else millisUntilWindowOpens(nowForWindow, startHourForWindow, endHourForWindow),
             clockMillis = clockMillis,
             queueFullFlash = clockMillis < queueFullFlashUntil,
-            withinWindow = isWithinActiveWindow(
-                LocalDateTime.now(),
-                (savedStartHour.toIntOrNull() ?: 9).coerceIn(0, 24),
-                (savedEndHour.toIntOrNull() ?: 21).coerceIn(0, 24)
-            ),
+            withinWindow = isWithinWindowNow,
             vacationMode = vacationMode,
             onForceDispatch = { forceDispatchNow() },
             onOpenSettings = { showingSettings = true },
@@ -989,6 +999,11 @@ fun TaskPromptScreen(
     maxQueueSize: Int,
     promptsPerDay: Int,
     nextDispatchEpoch: Long?,
+    // Millis until the active window opens, computed live off the clock/settings (see the call
+    // site) - null while inside the window. DEFECTS.md item 6: deliberately NOT derived from
+    // nextDispatchEpoch, which a forced tap outside the window repurposes as a pacing interval
+    // for the background alarm, unrelated to when the window actually opens.
+    windowOpensInMillis: Long?,
     clockMillis: Long,
     queueFullFlash: Boolean,
     withinWindow: Boolean,
@@ -1118,8 +1133,8 @@ fun TaskPromptScreen(
             vacationMode -> "Hard paused — uncheck it in Settings to resume"
             promptsPerDay <= 0 -> "Automatic prompts off — set \"prompts per day\""
             !backgroundPromptsRunning && withinWindow -> "Paused — tap for a task now"
-            !withinWindow && nextDispatchEpoch != null ->
-                "Window opens in ${formatCountdown(nextDispatchEpoch - clockMillis)} — tap for one now"
+            !withinWindow && windowOpensInMillis != null ->
+                "Window opens in ${formatCountdown(windowOpensInMillis)} — tap for one now"
             nextDispatchEpoch != null ->
                 "Next task in ${formatCountdown(nextDispatchEpoch - clockMillis)} — tap for it now"
             else -> "Tap for a task now"
