@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Vern McGeorge. All rights reserved.
-// Updated 2026-09-24, after version v0.2.0-82 synchronization-improvements 2026-09-25
+// Updated 2026-09-25, after version v0.2.0-84 main 2026-09-25
 package com.microtasking.app
 
 import android.Manifest
@@ -694,9 +694,16 @@ fun MicroTaskingApp(
         savedPromptsPerDay,
         savedMaxQueueSize
     ) {
-        if (promptTasks.isEmpty()) {
-            return@LaunchedEffect
-        }
+        // DEFECTS.md item 7: this used to return@LaunchedEffect right here when promptTasks was
+        // empty - which also skipped the poll loop below, freezing clockMillis (and with it the
+        // on-screen countdown, and the window-open transition, and everything else that depends on
+        // recomposition being driven by it) for good until something made the pool non-empty again.
+        // Not needed for safety: TaskDelivery.tick already no-ops harmlessly on an empty pool
+        // (loadSettings returns null the moment eligiblePromptTasks is empty, before touching
+        // next_dispatch_epoch_ms or anything else) - so there's nothing here that actually needs
+        // guarding against an empty pool. The clock must keep running regardless, since it's also
+        // what makes the "No tasks available" message (see countdownText) live instead of frozen.
+        //
         // Tick once on entry so a window opening (or a settings change) dispatches immediately
         // rather than waiting out a whole interval first. Harmless to call redundantly (e.g. every
         // time this activity is reopened) - tick() itself no-ops if the last real dispatch already
@@ -705,7 +712,8 @@ fun MicroTaskingApp(
         withContext(Dispatchers.IO) { TaskDelivery.tick(context) }
         refreshFromPrefs()
         // 1s poll: cheap while foregrounded (screen is on), doubles as the countdown clock, and
-        // lets a force-dispatch tap take effect within a second by just rewriting the epoch.
+        // lets a force-dispatch tap take effect within a second by just rewriting the epoch. Keeps
+        // running even with nothing eligible to dispatch - see the item 7 note above.
         while (true) {
             delay(1_000L)
             clockMillis = System.currentTimeMillis()
@@ -890,6 +898,9 @@ fun MicroTaskingApp(
             maxQueueSize = savedMaxQueueSize,
             promptsPerDay = savedPromptsPerDay.toIntOrNull() ?: 0,
             nextDispatchEpoch = nextDispatchEpoch,
+            // DEFECTS.md item 7: nothing is, or ever will be, eligible to dispatch - distinct from
+            // every other countdown case below, which all assume there's a real pool to pick from.
+            hasEligibleTasks = promptTasks.isNotEmpty(),
             // DEFECTS.md item 6: next_dispatch_epoch_ms also doubles as the pacing interval a
             // forced tap outside the window arms for the background alarm (fixedDispatchIntervalMillis
             // - a fixed cadence unrelated to window-open timing, per its own doc comment), so it's
@@ -999,6 +1010,10 @@ fun TaskPromptScreen(
     maxQueueSize: Int,
     promptsPerDay: Int,
     nextDispatchEpoch: Long?,
+    // DEFECTS.md item 7: true once there's nothing eligible to ever dispatch (no category
+    // selected, or every selected category is empty/disabled) - takes priority over every other
+    // countdown case, all of which assume there's a real pool behind them.
+    hasEligibleTasks: Boolean,
     // Millis until the active window opens, computed live off the clock/settings (see the call
     // site) - null while inside the window. DEFECTS.md item 6: deliberately NOT derived from
     // nextDispatchEpoch, which a forced tap outside the window repurposes as a pacing interval
@@ -1132,6 +1147,7 @@ fun TaskPromptScreen(
             queueFullFlash -> "Queue full — finish one first"
             vacationMode -> "Hard paused — uncheck it in Settings to resume"
             promptsPerDay <= 0 -> "Automatic prompts off — set \"prompts per day\""
+            !hasEligibleTasks -> "No tasks available — check your enabled categories in Settings"
             !backgroundPromptsRunning && withinWindow -> "Paused — tap for a task now"
             !withinWindow && windowOpensInMillis != null ->
                 "Window opens in ${formatCountdown(windowOpensInMillis)} — tap for one now"
