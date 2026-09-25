@@ -216,11 +216,16 @@ Next work session: make onboarding, import, the spreadsheet template, persistenc
       updates in place via a prefs listener. `ManagedTask` gained `link` so `referred` carries it.
     - 45 new unit tests (queue rules/flush outcomes/overlay, contract wire format, decode/apply,
       receiver end-to-end, all-or-nothing import); merged-manifest checked on a debug build.
-    - **Not done / open**: (1) *Decision for the user*: ActiveTasks removed its Sync button and made
-      QR scans only fill the Settings draft; MicroTasking deliberately keeps **Update Tasks** and
-      scan-then-import because he asked for exactly that earlier the same day - converge or not?
-      (2) On-device verification of the broadcast between the two shared-key installs, of the
-      WorkManager retry, and of an offline referral end to end. (3) A pre-existing gap this doesn't
-      close: when tab enumeration is blocked the legacy single-CSV fallback is still accepted as a
-      complete read. (4) `createRow` (My Tasks "Add task") should join the queue when item 9's
-      Phase 2 is built.
+    - **Settings converged with ActiveTasks (2026-09-24, at the user's request, after the first
+      build):** no Update Tasks button; a QR scan only fills the Settings draft (the scanner runs
+      inside `SettingsScreen`, so other edits survive a scan); Save Settings with a changed Sheet or
+      Web App URL saves, shows "Syncing…", and returns to the main screen on success or stays open
+      with the reason on failure; a different Sheet (different spreadsheet id) discards the pending
+      queue, imported tasks and on-screen queue first, and a sync in flight for the old Sheet is
+      dropped. The onboarding page's step 4 and the Sheet README were reworded to match.
+    - **Not done / open**: (1) On-device verification of the broadcast between the two shared-key
+      installs, of the WorkManager retry, of the Save-driven sync, and of an offline referral end to
+      end. (2) A pre-existing gap this doesn't close: when tab enumeration is blocked the legacy
+      single-CSV fallback is still accepted as a complete read. (3) `createRow` (My Tasks "Add task")
+      should join the queue when item 9's Phase 2 is built. (4) A Sheet switch keeps
+      `selected_categories` (names from the old Sheet) - they aren't pruned until the user edits them.

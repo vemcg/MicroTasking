@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 Vern McGeorge. All rights reserved.
-# Updated 2026-09-24, after version v0.2.0-78 sheet-surrogate-keys 2026-09-23
+# Updated 2026-09-24, after version v0.2.0-82 synchronization-improvements 2026-09-25
 """Builds the Google Sheets import template (one README tab + one tab per category) from
 content/tasks.json.
 
@@ -54,7 +54,7 @@ README_CONTENT = [
     ["3. SYNCING WITH THE APP:"],
     ["   - Set Share permissions to 'Anyone with the link can view'."],
     ["   - Paste your Sheet URL into the onboarding page to generate your custom QR code."],
-    ["   - In the MicroTasking app, tap Settings -> Google Sheet Connection -> Scan Sheet QR Code."],
+    ["   - In the MicroTasking app, tap Settings -> Google Sheet Connection -> Scan Sheet QR Code, then Save Settings."],
     [""],
     ["4. REFERRING A TASK TO ACTIVETASKS (OPTIONAL):"],
     ["   - Only needed if you also use the ActiveTasks companion app. In this Sheet's Extensions -> Apps Script editor: Deploy -> New deployment -> Web app -> Execute as Me, Who has access Anyone with the link -> Deploy."],

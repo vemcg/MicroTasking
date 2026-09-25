@@ -474,9 +474,11 @@ as `custom-` tasks) becomes the on-the-go entry point:
   **Settings layout (both apps, identical):** one section titled **Google Sheet Connection**,
   top to bottom: why a Sheet URL is needed → "Google Sheet URL" box → **Scan Sheet QR Code**; why
   the Web App URL is needed → "Apps Script Web App URL" box → **Scan Web App QR Code**; then a
-  single action button (MicroTasking **Update Tasks**, ActiveTasks **Sync Lists**) and its status
-  message. Both scan buttons open the same scanner and route the result by content
-  (`parseSetupQr`), never by which button was pressed.
+  status line. (Originally there was also a single action button - MicroTasking **Update Tasks**,
+  ActiveTasks **Sync Lists** - removed from both 2026-09-24: see "Synchronization" - the only manual
+  sync is now **Save Settings** with a changed connection.) Both scan buttons open the same
+  scanner and route the result by content (`parseSetupQr`), never by which button was pressed; a
+  scan only fills the draft.
 - **Onboarding page** (`scripts/generate_install_page.py`): the two boxes (Sheet URL, Web App URL)
   become one **Connection code** box, with the "set sharing to Anyone with the link" instruction
   removed. Validation flags the two common mix-ups: the Apps Script *editor* address
@@ -519,9 +521,22 @@ shows up in the other app within seconds instead of waiting for a Sheet read.
   **Local** (survive a sync): `neverSuggest`, `temporarilyUnavailable`, and `referredAt` until the
   Sheet's referred rows say otherwise.
 - **When a sync runs**: every time the app becomes visible (`ON_START`), after a referral, and on
-  the manual **Update Tasks** button / a Sheet QR scan. Only one runs at a time; a trigger mid-sync
-  queues exactly one follow-up. Not on a timer - the only background work is the one-shot flush
-  below.
+  **Settings > Save Settings when the Sheet URL or the Web App URL actually changed** (a full
+  resync against the new connection; saving with them unchanged doesn't sync). There is no manual
+  Update Tasks button any more. Only one runs at a time; a trigger mid-sync queues exactly one
+  follow-up. Not on a timer - the only background work is the one-shot flush below.
+- **Settings behavior** (same as ActiveTasks, decided by the user 2026-09-24): every Settings field
+  is a draft - nothing is saved until **Save Settings**, and Cancel discards it. **Scanning a QR
+  code only fills the draft** (the scanner is shown from inside `SettingsScreen`, so a scan never
+  unmounts it and loses other edits; a field the scan didn't carry is left as it was), followed by
+  "Scanned. Press Save Settings to connect." **Save with changed connection details** saves
+  everything, shows "Syncing…" on the Settings screen, and returns to the main screen when the sync
+  succeeds; if it doesn't (read failed, the Sheet needs setting up, no rows) Settings stays open with
+  the reason, the settings stay saved, and the next foreground sync retries. **Switching to a
+  different Sheet** (a different spreadsheet id - not merely a different way of writing the same
+  URL) first discards everything local to the old one: the pending-changes queue, its imported
+  (`external-`) tasks, and the on-screen task queue; a sync already running for the old Sheet has its
+  result dropped.
 - **What a sync does**: (1) flush the pending-changes queue, oldest first; (2) read the Sheet - every
   tab's rows, and the referred rows via the Web App; (3) rebuild the pool from what was read,
   against the task list *as it is at that moment* (so a message that landed mid-sync isn't
@@ -591,10 +606,10 @@ shows up in the other app within seconds instead of waiting for a Sheet read.
   `keystore/debug.keystore` (same alias/passwords) so the signature-level permission works between
   the two; Android refuses to update an app across a key change, so ActiveTasks had to be
   uninstalled once before its first shared-key build.
-- **Not mirrored from ActiveTasks's Settings decisions** (they were made for that app; the user
-  asked for the opposite here earlier the same day): MicroTasking keeps its **Update Tasks** button,
-  and a Sheet QR scan still registers the Sheet and imports immediately, so both codes can be
-  scanned and Update Tasks pressed. Whether to converge them is the user's call.
+- **Settings decisions mirrored** (2026-09-24, after the user chose to converge the two apps): the
+  Update Tasks button is removed, a QR scan only fills the draft, and the only manual sync is Save
+  Settings with a changed connection - see "Settings behavior" above. (First built without this: the
+  user had earlier asked to keep Update Tasks and scan-then-import, then reversed that.)
 - **Known limits**: an offline referral reaches ActiveTasks only when the queue flushes; the
   legacy single-CSV fallback (tab enumeration blocked) is still treated as a complete read; not yet
   verified on a device (both apps, signed with the shared key, installed on one device, are needed

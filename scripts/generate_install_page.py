@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 Vern McGeorge. All rights reserved.
+# Updated 2026-09-24, after version v0.2.0-82 synchronization-improvements 2026-09-25
 """Generates the GitHub Pages install & onboarding page + QR code pointing at a release APK."""
 import argparse
 import pathlib
@@ -470,10 +471,11 @@ def main() -> None:
         <li>Open the <strong>MicroTasking</strong> app on your Android phone.</li>
         <li>Tap the <strong>Settings (gear icon)</strong> in the top corner.</li>
         <li>Open the <strong>Google Sheet Connection</strong> section.</li>
-        <li>Tap <strong>Scan Sheet QR Code</strong> and scan the <strong>Sheet QR code</strong> from Step 3. MicroTasking will sync your categories and tasks.</li>
-        <li>If you made a Web App QR code, tap <strong>Scan Web App QR Code</strong> and scan that one. It just registers the Web App URL and leaves your tasks as they are.</li>
+        <li>Tap <strong>Scan Sheet QR Code</strong> and scan the <strong>Sheet QR code</strong> from Step 3. A scan only fills in the Sheet URL box &mdash; nothing is saved yet.</li>
+        <li>If you made a Web App QR code, tap <strong>Scan Web App QR Code</strong> and scan that one. It fills in the Web App URL box the same way.</li>
+        <li>Tap <strong>Save Settings</strong>. That saves both and syncs your categories and tasks; the screen says <em>Syncing&hellip;</em> and returns to the task list when it's done (or stays open and tells you what went wrong).</li>
       </ol>
-      <p style="color: var(--accent); font-weight: 600; margin-top: 0.5rem;">You're all set! Using ActiveTasks too? Its Settings has the same <strong>Google Sheet Connection</strong> section &mdash; scan the same two codes from Step 3 there; there's no need to generate them again.</p>
+      <p style="color: var(--accent); font-weight: 600; margin-top: 0.5rem;">You're all set! Using ActiveTasks too? Its Settings has the same <strong>Google Sheet Connection</strong> section and works the same way &mdash; scan the same two codes from Step 3 there and tap <strong>Save Settings</strong>; there's no need to generate them again.</p>
     </section>
   </main>
 
