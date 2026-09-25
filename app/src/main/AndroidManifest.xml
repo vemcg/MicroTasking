@@ -9,6 +9,18 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
+    <!-- Cross-app messages with ActiveTasks (see TaskEvents.kt / SPEC.md "Synchronization"). Both
+         apps declare the same signature-level permission (so install order doesn't matter) and
+         only an app signed with the same key can hold it - hence the shared debug keystore. -->
+    <permission
+        android:name="com.vernmcgeorge.tasks.permission.TASK_EVENTS"
+        android:protectionLevel="signature" />
+    <uses-permission android:name="com.vernmcgeorge.tasks.permission.TASK_EVENTS" />
+
+    <queries>
+        <package android:name="com.activetasks.app" />
+    </queries>
+
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
@@ -30,6 +42,12 @@
         <receiver
             android:name=".PromptAlarmReceiver"
             android:exported="false" />
+
+        <!-- Exported so ActiveTasks can reach it, but only with the signature permission above. -->
+        <receiver
+            android:name=".TaskEventReceiver"
+            android:exported="true"
+            android:permission="com.vernmcgeorge.tasks.permission.TASK_EVENTS" />
 
     </application>
 

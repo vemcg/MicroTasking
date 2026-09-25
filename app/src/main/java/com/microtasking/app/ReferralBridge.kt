@@ -1,4 +1,5 @@
 // Copyright (c) 2026 Vern McGeorge. All rights reserved.
+// Updated 2026-09-24, after version v0.2.0-81 main 2026-09-24
 package com.microtasking.app
 
 import org.json.JSONArray
@@ -29,6 +30,23 @@ fun parseSetupQr(scannedText: String): SetupQrPayload {
         webAppUrl = lines.firstOrNull { looksLikeWebAppUrl(it) }
     )
 }
+
+/**
+ * The Web App answered, but with `ok:false`. [rowNotFound] is true when the answer means "that row
+ * (or its tab) doesn't exist in the Sheet any more" - a definitive answer, not a transient failure
+ * (see [isRowNotFound]); a queued write that gets it is dropped instead of retried forever.
+ */
+class WebAppException(message: String, val rowNotFound: Boolean) : Exception(message)
+
+/**
+ * Classifies an `ok:false` Web App answer as "row/tab not found". The v2 contract carries a `code`
+ * (`no_such_row` / `no_such_tab`); the script actually deployed today (v1, no codes) only has the
+ * error text - `No row with that task id`, `No row matching that description`,
+ * `No tab named "<x>"` - so both are recognised.
+ */
+fun isRowNotFound(code: String?, message: String): Boolean =
+    code == "no_such_row" || code == "no_such_tab" ||
+        message.startsWith("No row ") || message.startsWith("No tab named ")
 
 /**
  * Client for the per-user Apps Script Web App (see SPEC.md "Sheet connection & API (Apps Script
@@ -160,7 +178,9 @@ object WebAppClient {
         val responseBody = connection.readResponse()
         val json = JSONObject(responseBody)
         if (!json.optBoolean("ok", false)) {
-            error(json.optString("error", "Web App returned ok=false"))
+            val message = json.optString("error", "Web App returned ok=false")
+            val code = if (json.has("code") && !json.isNull("code")) json.getString("code") else null
+            throw WebAppException(message, rowNotFound = isRowNotFound(code, message))
         }
         json
     }

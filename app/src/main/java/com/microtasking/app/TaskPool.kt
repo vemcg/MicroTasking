@@ -1,4 +1,5 @@
 // Copyright (c) 2026 Vern McGeorge. All rights reserved.
+// Updated 2026-09-24, after version v0.2.0-81 main 2026-09-24
 package com.microtasking.app
 
 import android.content.Context
@@ -33,8 +34,32 @@ data class ManagedTask(
     // over the legacy category|description key the same way. Not yet used for category identity -
     // a tab rename is a separate, not-yet-solved problem (needs categoryId, which nothing reads
     // yet - see the Sheet script's ensureCategoryId_).
-    val taskId: String? = null
+    val taskId: String? = null,
+    // The Sheet row's optional link (column C). Read from the Sheet on every sync; carried so the
+    // "referred" cross-app message (see TaskEvents.kt) can hand ActiveTasks the real link.
+    val link: String = ""
 )
+
+/**
+ * The row-identity rule for queued changes and incoming cross-app events (SPEC.md "Synchronization"
+ * > "Message contract, v1"): match by `taskId` when BOTH sides have one - two different taskIds are
+ * two different rows, no fallback - else by category + description, the same identity the Web App
+ * itself uses for a row that predates task ids.
+ */
+fun sameRow(
+    aTaskId: String?, aCategory: String, aDescription: String,
+    bTaskId: String?, bCategory: String, bDescription: String
+): Boolean =
+    if (aTaskId != null && bTaskId != null) aTaskId == bTaskId
+    else aCategory == bCategory && aDescription == bDescription
+
+/**
+ * The key a task is matched on when reconciling against Sheet state and against queued/incoming
+ * changes: its [ManagedTask.taskId] when it has one (rename-proof), else the legacy
+ * `"<category>|<description>"` text key - the same row identity the Web App uses.
+ */
+fun referralKeyOf(task: ManagedTask): String =
+    task.taskId ?: WebAppClient.rowKey(task.category, task.description)
 
 enum class TaskLifecycleState {
     READY,
@@ -122,6 +147,7 @@ private fun managedTaskToJson(task: ManagedTask): JSONObject = JSONObject().appl
     put("neverSuggest", task.neverSuggest)
     put("referredAt", task.referredAt ?: JSONObject.NULL)
     put("taskId", task.taskId ?: JSONObject.NULL)
+    put("link", task.link)
 }
 
 private fun managedTaskFromJson(task: JSONObject): ManagedTask = ManagedTask(
@@ -137,7 +163,9 @@ private fun managedTaskFromJson(task: JSONObject): ManagedTask = ManagedTask(
     // "not referred" (null), not a crash, same pattern optNullableLong already uses below.
     referredAt = if (task.has("referredAt") && !task.isNull("referredAt")) task.getLong("referredAt") else null,
     // DEV (sheet-surrogate-keys): same absent-on-an-older-build tolerance as referredAt above.
-    taskId = if (task.has("taskId") && !task.isNull("taskId")) task.getString("taskId") else null
+    taskId = if (task.has("taskId") && !task.isNull("taskId")) task.getString("taskId") else null,
+    // Absent on an entry persisted by a build older than this field.
+    link = task.optString("link", "")
 )
 
 fun readManagedTasks(json: String): List<ManagedTask> = runCatching {
@@ -234,7 +262,7 @@ fun refreshReferralState(
     referredRowKeys: Set<String>,
     now: Long = System.currentTimeMillis()
 ): List<ManagedTask> = tasks.map { task ->
-    val key = task.taskId ?: "${task.category}|${task.description}"
+    val key = referralKeyOf(task)
     when {
         key !in referredRowKeys -> if (task.referredAt != null) task.copy(referredAt = null) else task
         task.referredAt != null -> task

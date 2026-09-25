@@ -1,7 +1,10 @@
 // Copyright (c) 2026 Vern McGeorge. All rights reserved.
+// Updated 2026-09-24, after version v0.2.0-81 main 2026-09-24
 package com.microtasking.app
 
 import android.Manifest
+import android.content.SharedPreferences
+import java.util.UUID
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Build
@@ -317,7 +320,6 @@ fun MicroTaskingApp(
     // sheetUrl/webAppUrl already avoid that by being hoisted the same way. Same smart-default as
     // before: open "Google Sheet Connection" only for a not-yet-configured install.
     var settingsOpenSection by remember { mutableStateOf(if (savedSheetUrl.isBlank()) "Google Sheet Connection" else "") }
-    var referralInFlightTaskId by remember { mutableStateOf<String?>(null) }
     var referralErrorMessage by remember { mutableStateOf<String?>(null) }
     var showingReferralMatrixFor by remember { mutableStateOf<String?>(null) }
     var savedUserTasks by remember { mutableStateOf(userTasks) }
@@ -345,6 +347,32 @@ fun MicroTaskingApp(
     val referredDuringSync = remember { mutableSetOf<String>() }
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
+    // How many Sheet writes are still queued (PendingChanges) - drives the quiet "N changes waiting
+    // to reach your Sheet" line on the main screen; 0 hides it.
+    var pendingChangeCount by remember { mutableIntStateOf(PendingChanges.count(context)) }
+    // Flushes started from this screen that haven't finished - the "N changes waiting" line stays
+    // hidden while one runs, so a referral doesn't flash it for the second the write takes.
+    var flushesRunning by remember { mutableIntStateOf(0) }
+
+    // Two things can change persisted state behind this composable's back: ActiveTasks's messages
+    // (TaskEventReceiver rewrites the saved task list, even while this screen is showing) and the
+    // background flush job (shrinks the pending queue). Watching the prefs updates the screen in
+    // place for both. Our own writes trip it too, but they always land in state first, so the
+    // equality check makes those a no-op.
+    DisposableEffect(context) {
+        val prefs = TaskDelivery.prefs(context)
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            when (key) {
+                PendingChanges.PREFS_KEY -> pendingChangeCount = PendingChanges.count(context)
+                "managed_tasks" -> {
+                    val latest = readManagedTasks(prefs.getString("managed_tasks", "[]") ?: "[]")
+                    if (latest != savedManagedTasks) savedManagedTasks = latest
+                }
+            }
+        }
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+        onDispose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
     val availableCategories = (savedManagedTasks.map { it.category } + savedUserTasks.map { it.category })
         .distinct()
     val activeCategoryOrder = availableCategories.filter { it in savedCategories }
@@ -443,11 +471,28 @@ fun MicroTaskingApp(
         isImportingSheet = true
         sheetImportMessage = null
         referredDuringSync.clear()
+        val webAppUrlAtStart = savedWebAppUrl
         coroutineScope.launch {
-            val result = withContext(Dispatchers.IO) {
-                importExternalTasksFromSheet(url)
+            // All the network work happens here, off the main thread, touching no UI state.
+            // Step 1: flush the pending-changes queue, so our own unsent writes reach the Sheet
+            // before we read it back. Step 2: read the whole Sheet - every tab's rows, and (through
+            // the Web App) which rows are referred. Nothing is applied until both reads are in.
+            val fetch = withContext(Dispatchers.IO) {
+                val stillQueued = PendingChanges.flushToSheet(context)
+                val sheet = importExternalTasksFromSheet(url)
+                val referred = if (webAppUrlAtStart.isNotBlank() && !sheet.failed) {
+                    WebAppClient.getReferredRowKeys(webAppUrlAtStart)
+                } else null
+                FetchedSheet(stillQueued, sheet, referred)
             }
+            pendingChangeCount = fetch.stillQueued
+            if (fetch.stillQueued > 0 && webAppUrlAtStart.isNotBlank()) PendingFlushScheduler.schedule(context)
             isImportingSheet = false
+            val result = fetch.sheet
+            // All or nothing (SPEC.md "Synchronization"): if any part of the read failed - a tab, the
+            // tab list, or the referred-rows call - change nothing locally. A partial read looks
+            // exactly like "those tabs are empty / nothing is referred" and would wipe tasks.
+            val syncFailed = result.failed || fetch.referred?.isFailure == true
             val importedTasks = result.tasks
             // A sheet that still only has the Apps Script's default "Sheet1" hasn't been set up yet.
             val blankDefaultSheet = importedTasks.isEmpty() &&
@@ -460,24 +505,25 @@ fun MicroTaskingApp(
                 else -> importedTasks.map { it.category }.toSet()
             }
 
-            if (authoritativeCategories.isNotEmpty()) {
+            if (syncFailed) {
+                sheetImportMessage = "Couldn't read the whole Sheet, so nothing was changed. Check your " +
+                    "connection - your tasks stay as they were and the next sync tries again."
+            } else if (authoritativeCategories.isNotEmpty()) {
                 val before = savedManagedTasks.map { it.category }.toSet() + savedUserTasks.map { it.category }.toSet()
-                savedManagedTasks = mergeImportedManagedTasks(importedTasks, savedManagedTasks, authoritativeCategories)
+                // Merged against the task list as it is NOW (not as it was when the read started),
+                // so a message from ActiveTasks that landed mid-sync isn't overwritten.
+                var merged = mergeImportedManagedTasks(importedTasks, savedManagedTasks, authoritativeCategories)
                 // Importance/Urgency never come from this CSV path (see SPEC.md "Sheet
                 // write-back": hiding a column doesn't exclude it from CSV/gviz export, so those
-                // two columns are read via the Web App only) - fold in the current referral state
-                // right after the CSV-based merge, at this same sync boundary, if a Web App URL
-                // is configured. A blank/unreachable Web App just leaves referredAt as whatever
-                // mergeImportedManagedTasks already carried forward from prior local state.
-                if (savedWebAppUrl.isNotBlank()) {
-                    val referredKeysResult = withContext(Dispatchers.IO) {
-                        WebAppClient.getReferredRowKeys(savedWebAppUrl)
-                    }
-                    referredKeysResult.onSuccess { referredKeys ->
-                        savedManagedTasks = refreshReferralState(savedManagedTasks, referredKeys + referredDuringSync)
-                    }
+                // two columns are read via the Web App only) - fold in the referral state that
+                // was read at this same sync boundary, if a Web App URL is configured.
+                fetch.referred?.getOrNull()?.let { referredKeys ->
+                    merged = refreshReferralState(merged, referredKeys + referredDuringSync)
                 }
-                onManagedTasksSaved(savedManagedTasks)
+                // Lay our own unsent writes over what the Sheet just said: a referral still waiting
+                // to reach the Sheet stays referred, instead of being "corrected" back into the pool.
+                merged = applyPendingOverlay(merged, PendingChanges.all(context))
+                persistManagedTasks(merged)
                 val prunedUserTasks = savedUserTasks.filter { it.category in authoritativeCategories }
                 if (prunedUserTasks.size != savedUserTasks.size) {
                     savedUserTasks = prunedUserTasks
@@ -506,52 +552,84 @@ fun MicroTaskingApp(
         }
     }
 
+    // Flushes the pending-changes queue now, in the background; if anything is left behind (offline,
+    // or the Web App had trouble) asks WorkManager to try again once the network is back. While it
+    // runs the "N changes waiting" line stays hidden - it only means something after a flush FAILED.
+    fun startFlush() {
+        if (savedWebAppUrl.isBlank()) return
+        flushesRunning++
+        coroutineScope.launch {
+            val stillQueued = withContext(Dispatchers.IO) { PendingChanges.flushToSheet(context) }
+            flushesRunning--
+            pendingChangeCount = stillQueued
+            if (stillQueued > 0) PendingFlushScheduler.schedule(context)
+        }
+    }
+
+    // Pointing the app at a different Sheet throws away whatever was still waiting to be written to
+    // the old one - those changes describe rows that don't exist in the new Sheet.
+    fun discardPendingIfSheetChanged(newSheetUrl: String) {
+        val oldId = extractGoogleSheetId(savedSheetUrl)
+        val newId = extractGoogleSheetId(newSheetUrl)
+        if (oldId != null && newId != null && oldId != newId) {
+            PendingChanges.clear(context)
+            pendingChangeCount = 0
+        }
+    }
+
     /**
-     * "Refer to ActiveTasks" (see SPEC.md "Task referral to ActiveTasks"): writes importance/urgency to the
-     * task's Sheet row via the Apps Script Web App, and on success stamps ManagedTask.referredAt
-     * locally right away (not waiting on the next sync) and removes the task from the queue with
-     * a replacement backfilled in its slot - a neutral outcome, same as Substitute, whether or not
-     * the task had already been Started. A sync then runs so the Sheet's view is re-read straight
-     * after the write.
+     * "Refer to ActiveTasks" (see SPEC.md "Task referral to ActiveTasks" and "Synchronization"): the
+     * referral takes effect locally at once - the task is stamped referred and leaves the queue with
+     * a replacement backfilled in its slot, a neutral outcome like Substitute whether or not it had
+     * been Started - and its `setPriority` write is queued (PendingChanges), so an offline or failed
+     * write is retried rather than lost. A flush starts immediately; when the Sheet has accepted the
+     * write, the "referred" message goes out to ActiveTasks (never before). Then a sync re-reads the
+     * Sheet.
      */
     fun submitReferral(taskId: String, importance: Double, urgency: Double) {
         val task = taskQueue.find { it.task.id == taskId }?.task ?: return
-        referralInFlightTaskId = taskId
-        referralErrorMessage = null
-        coroutineScope.launch {
-            val result = withContext(Dispatchers.IO) {
-                // DEV (sheet-surrogate-keys): pass task.taskId too, when this task has one, so the
-                // write is rename-proof the same way reads already are - see WebAppClient.setPriority.
-                WebAppClient.setPriority(savedWebAppUrl, task.category, task.description, importance, urgency, task.taskId)
-            }
-            referralInFlightTaskId = null
-            result.onSuccess {
-                DiagnosticLog.log(context, "REFERRED", "task=$taskId category=${task.category} importance=$importance urgency=$urgency")
-                val updatedTasks = savedManagedTasks.map {
-                    if (it.id == taskId) it.copy(referredAt = System.currentTimeMillis()) else it
-                }
-                persistManagedTasks(updatedTasks)
-                val freshPromptTasks = eligiblePromptTasks(updatedTasks, savedUserTasks, savedCategories)
-                val queuedTaskIds = taskQueue.map { it.task.id }.toSet()
-                val candidates = freshPromptTasks.filter { it.id !in queuedTaskIds }.ifEmpty { freshPromptTasks }
-                val newQueue = if (candidates.isEmpty()) {
-                    taskQueue.filterNot { it.task.id == taskId }
-                } else {
-                    val replacement = chooseWeightedTask(
-                        tasks = candidates,
-                        activeCategoryOrder = activeCategoryOrder,
-                        previousTaskId = taskId
-                    )
-                    taskQueue.map { if (it.task.id == taskId) TaskStackEntry(replacement) else it }
-                }
-                persistTaskQueue(newQueue)
-                showingReferralMatrixFor = null
-                referredDuringSync += WebAppClient.rowKey(task.category, task.description)
-                if (savedSheetUrl.isNotBlank()) runSheetImport(savedSheetUrl)
-            }.onFailure { error ->
-                referralErrorMessage = error.message ?: "Couldn't reach the Web App - check the URL in Settings and your connection."
-            }
+        if (savedWebAppUrl.isBlank()) {
+            // Nothing to write to yet, so nothing to queue - say what to do rather than queue forever.
+            referralErrorMessage = "No Web App URL is set yet. Add it in Settings (the \"Apps Script Web App URL\" field), then try again."
+            return
         }
+        referralErrorMessage = null
+        val now = System.currentTimeMillis()
+        DiagnosticLog.log(context, "REFERRED", "task=$taskId category=${task.category} importance=$importance urgency=$urgency")
+        PendingChanges.enqueue(
+            context,
+            PendingChange(
+                id = UUID.randomUUID().toString(),
+                taskId = task.taskId,
+                category = task.category,
+                description = task.description,
+                link = task.link,
+                importance = importance.coerceIn(0.0, 1.0),
+                urgency = urgency.coerceIn(0.0, 1.0),
+                queuedAtEpochMs = now
+            )
+        )
+        // Keeps a sync that is already in flight (its read predates this write) from un-referring it.
+        referredDuringSync += referralKeyOf(task)
+        val updatedTasks = savedManagedTasks.map { if (it.id == taskId) it.copy(referredAt = now) else it }
+        persistManagedTasks(updatedTasks)
+        val freshPromptTasks = eligiblePromptTasks(updatedTasks, savedUserTasks, savedCategories)
+        val queuedTaskIds = taskQueue.map { it.task.id }.toSet()
+        val candidates = freshPromptTasks.filter { it.id !in queuedTaskIds }.ifEmpty { freshPromptTasks }
+        val newQueue = if (candidates.isEmpty()) {
+            taskQueue.filterNot { it.task.id == taskId }
+        } else {
+            val replacement = chooseWeightedTask(
+                tasks = candidates,
+                activeCategoryOrder = activeCategoryOrder,
+                previousTaskId = taskId
+            )
+            taskQueue.map { if (it.task.id == taskId) TaskStackEntry(replacement) else it }
+        }
+        persistTaskQueue(newQueue)
+        showingReferralMatrixFor = null
+        startFlush()
+        if (savedSheetUrl.isNotBlank()) runSheetImport(savedSheetUrl)
     }
 
     // Sync on every foreground entry - a cold launch, or coming back from ActiveTasks after it
@@ -658,6 +736,7 @@ fun MicroTaskingApp(
                 }
                 val scannedSheetUrl = payload.sheetUrl
                 if (scannedSheetUrl != null) {
+                    discardPendingIfSheetChanged(scannedSheetUrl)
                     savedSheetUrl = scannedSheetUrl
                     onSheetUrlSaved(scannedSheetUrl)
                     runSheetImport(scannedSheetUrl)
@@ -721,6 +800,7 @@ fun MicroTaskingApp(
                 savedEndHour = end
                 savedPromptsPerDay = prompts
                 savedMaxQueueSize = queueSize
+                discardPendingIfSheetChanged(sheetUrl)
                 savedSheetUrl = sheetUrl
                 onSettingsSaved(categories, start, end, prompts, queueSize, sheetUrl)
                 showingSettings = false
@@ -753,7 +833,9 @@ fun MicroTaskingApp(
         } else {
             EisenhowerReferralScreen(
                 task = referredTask,
-                submitting = referralInFlightTaskId == referredTask.id,
+                // The referral applies locally and is queued at once - there's no in-flight state
+                // to wait on any more (see submitReferral).
+                submitting = false,
                 errorMessage = referralErrorMessage,
                 onConfirm = { importance, urgency -> submitReferral(referredTask.id, importance, urgency) },
                 onCancel = {
@@ -845,10 +927,21 @@ fun MicroTaskingApp(
                 showingScore = false
             },
             backgroundPromptsRunning = backgroundPromptsRunning,
-            onBackgroundPromptsChanged = { setBackgroundPrompts(it) }
+            onBackgroundPromptsChanged = { setBackgroundPrompts(it) },
+            // Only after a flush FAILED does a queued change mean anything to the user: hidden
+            // while a flush or sync is running, so a referral doesn't flash it for a second.
+            pendingChangeCount = if (flushesRunning == 0 && !isImportingSheet) pendingChangeCount else 0
         )
     }
 }
+
+/** One sync's network results, gathered together so nothing is applied until all of it is in. */
+private class FetchedSheet(
+    val stillQueued: Int,
+    val sheet: SheetImportResult,
+    /** The referred-row keys from the Web App; null when no Web App is configured (or the Sheet read itself failed). */
+    val referred: Result<Set<String>>?
+)
 
 /** A rough H:MM:SS for a non-negative countdown; clamps negatives to 0:00:00. */
 fun formatCountdown(millis: Long): String {
@@ -878,7 +971,9 @@ fun TaskPromptScreen(
     onAbandon: (String) -> Unit,
     onSubstitute: (String) -> Unit,
     onRefer: (String) -> Unit,
-    onNextPrompt: () -> Unit
+    onNextPrompt: () -> Unit,
+    // Sheet writes still waiting to go through after a failed flush (PendingChanges); 0 hides the line.
+    pendingChangeCount: Int = 0
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
@@ -912,6 +1007,17 @@ fun TaskPromptScreen(
                     "Task queue: ${taskEntries.size} active of $maxQueueSize",
                     style = MaterialTheme.typography.labelLarge
                 )
+            }
+
+            if (pendingChangeCount > 0) {
+                item {
+                    Text(
+                        if (pendingChangeCount == 1) "1 change waiting to reach your Sheet"
+                        else "$pendingChangeCount changes waiting to reach your Sheet",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
 
             // Key by id + position: ids are unique in a healthy queue, but a duplicate key is a
@@ -2085,7 +2191,8 @@ fun parseExternalTaskCsv(csvText: String, categoryName: String): List<ManagedTas
             enabled = enabled,
             temporarilyUnavailable = false,
             neverSuggest = false,
-            taskId = taskId
+            taskId = taskId,
+            link = link
         )
     }
 }
@@ -2135,14 +2242,37 @@ private fun fetchSheetTabNames(spreadsheetId: String): List<String> = runCatchin
     List(entries.length()) { index -> entries.getJSONObject(index).getJSONObject("title").getString("\$t") }
 }.getOrDefault(emptyList())
 
-/** Fetches one tab's rows as CSV, addressed by tab name rather than gid. */
-private fun fetchSheetTabCsv(spreadsheetId: String, tabName: String): String = runCatching {
+/**
+ * Fetches one tab's rows as CSV, addressed by tab name rather than gid. Null means the fetch
+ * FAILED - deliberately distinct from `""`, a tab that was read fine and simply has no rows, since
+ * treating a failed fetch as an empty tab would silently drop that tab's tasks on the next sync.
+ */
+private fun fetchSheetTabCsv(spreadsheetId: String, tabName: String): String? = runCatching {
     val encodedName = URLEncoder.encode(tabName, "UTF-8")
     val url = "https://docs.google.com/spreadsheets/d/$spreadsheetId/gviz/tq?tqx=out:csv&sheet=$encodedName"
     URL(url).readText()
-}.getOrDefault("")
+}.getOrNull()
 
-data class SheetImportResult(val tasks: List<ManagedTask>, val tabNames: List<String>)
+/**
+ * [failed] means the Sheet could not be read completely (see [assembleSheetImport]) - the caller
+ * must then change nothing locally, never treat what did come back as "the whole Sheet".
+ */
+data class SheetImportResult(val tasks: List<ManagedTask>, val tabNames: List<String>, val failed: Boolean = false)
+
+/**
+ * Reads every tab in [tabNames] via [fetchTabCsv] and parses it - or fails as a whole. A sync is
+ * all-or-nothing (SPEC.md "Synchronization"): if even one tab's fetch fails the result is [failed]
+ * with no tasks, because a partial read is indistinguishable from "those tabs are empty" and would
+ * make the merge delete their tasks.
+ */
+fun assembleSheetImport(tabNames: List<String>, fetchTabCsv: (String) -> String?): SheetImportResult {
+    val tasks = mutableListOf<ManagedTask>()
+    for (tabName in tabNames) {
+        val csv = fetchTabCsv(tabName) ?: return SheetImportResult(emptyList(), tabNames, failed = true)
+        tasks += parseExternalTaskCsv(csv, tabName)
+    }
+    return SheetImportResult(tasks, tabNames)
+}
 
 fun importExternalTasksFromSheet(url: String): SheetImportResult {
     val spreadsheetId = extractGoogleSheetId(url) ?: return SheetImportResult(emptyList(), emptyList())
@@ -2151,17 +2281,18 @@ fun importExternalTasksFromSheet(url: String): SheetImportResult {
         .filter { !it.equals("README", ignoreCase = true) }
 
     if (tabNames.isNotEmpty()) {
-        val tasks = tabNames.flatMap { tabName -> parseExternalTaskCsv(fetchSheetTabCsv(spreadsheetId, tabName), tabName) }
-        return SheetImportResult(tasks, tabNames)
+        return assembleSheetImport(tabNames) { tabName -> fetchSheetTabCsv(spreadsheetId, tabName) }
     }
 
     // Tab enumeration unavailable (e.g. sharing settings blocked it) - fall back to a single
-    // CSV export so import still works, just without per-tab categories.
-    val fallbackTasks = runCatching {
+    // CSV export so import still works, just without per-tab categories. A failed fetch here is a
+    // failed read, not an empty Sheet.
+    val fallback = runCatching {
         val csv = URL(normalizeGoogleSheetCsvUrl(url)).readText()
         parseExternalTaskCsv(csv, "Imported")
-    }.getOrDefault(emptyList())
-    return SheetImportResult(fallbackTasks, emptyList())
+    }
+    return if (fallback.isSuccess) SheetImportResult(fallback.getOrThrow(), emptyList())
+    else SheetImportResult(emptyList(), emptyList(), failed = true)
 }
 
 

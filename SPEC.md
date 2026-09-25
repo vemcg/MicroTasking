@@ -234,7 +234,8 @@ deliberate — just do the task immediately.
   Complete (for now) / Fully complete. A trigger that fires while a sync is already running
   queues exactly one more sync behind it (the running one was fetched before the change), and the
   change is protected from that stale result meanwhile (MicroTasking keeps the row referred;
-  ActiveTasks doesn't re-add the completed item). Periodic background sync is still TBD.
+  ActiveTasks doesn't re-add the completed item). Periodic background sync is still TBD. A sync is
+  now all-or-nothing and flushes the pending-changes queue first - see "Synchronization" below.
 - **Guardrails**: HTTPS-only, timeout + response-size cap on fetches, CSV parsed as plain data
   only (never rendered/executed as HTML).
 
@@ -256,11 +257,14 @@ ActiveTasks's own `SPEC.md` ("Priority: Eisenhower matrix", "Referral bridge") a
   booleans. (Axis direction and the exact mapping are a first proposal — tunable, see Open
   questions.)
 - **Write-back**: those two values are written to the task's row in the shared Sheet via the
-  Apps Script Web App (see "Sheet connection & API" below) as soon as the touch is confirmed. On
-  success, the task is immediately removed from this app's stack — same as Defer, a replacement
-  is selected and appended to the bottom to keep the stack full. On failure (network/Web App
-  error), the referral is not applied and the task stays on the stack (exact failure-state UX
-  TBD at build time).
+  Apps Script Web App (see "Sheet connection & API" below) as soon as the touch is confirmed.
+  **The referral takes effect locally at once** — the task is stamped referred and immediately
+  removed from this app's stack, same as Defer, with a replacement selected and appended to the
+  bottom to keep the stack full — and the write goes through the persisted **pending-changes
+  queue** (see "Synchronization" below), so an offline or failed write is retried rather than
+  lost. (Superseded: the earlier "on failure the referral is not applied and the task stays on the
+  stack".) The one exception is no Web App URL configured at all: nothing to queue against, so the
+  matrix screen says to set it in Settings and applies nothing.
 - **Exclusion from future selection**: a new field, `ManagedTask.referredAt: Long?` (epoch ms,
   null = not referred), is the authoritative local signal — set immediately on a successful
   referral write (no waiting on the next sync), and refreshed from the sheet's `Importance`/
@@ -497,6 +501,105 @@ as `custom-` tasks) becomes the on-the-go entry point:
   xlsx/gviz read path. MicroTasking works read-only that way; ActiveTasks needs a connection code (it
   cannot work without priorities).
 
+## Synchronization (specified 2026-09-24, built on branch `synchronization-improvements`)
+
+*Agreed with the user 2026-09-24 and specified jointly with ActiveTasks; the full text, including
+its own side, is `ActiveTasks/SPEC.md` "Synchronization". This is MicroTasking's mirror of it - the
+model is the same, and the message contract below is identical in both apps' code (change only in
+step).*
+
+**Goal**: sync is invisible and automatic. **The Sheet is the definitive holder of reality**; the
+saved task pool is a cache that is shown instantly and then corrected from the Sheet. The two apps
+also message each other directly on the device, so a referral here or a completion in ActiveTasks
+shows up in the other app within seconds instead of waiting for a Sheet read.
+
+- **Sheet-owned** (always overwritten from the Sheet on sync): which tasks exist, their description,
+  link, category (tab), `taskId`, and the enabled checkbox. (Already true of
+  `mergeImportedManagedTasks`, which rebuilds the pool from the current import every sync.)
+  **Local** (survive a sync): `neverSuggest`, `temporarilyUnavailable`, and `referredAt` until the
+  Sheet's referred rows say otherwise.
+- **When a sync runs**: every time the app becomes visible (`ON_START`), after a referral, and on
+  the manual **Update Tasks** button / a Sheet QR scan. Only one runs at a time; a trigger mid-sync
+  queues exactly one follow-up. Not on a timer - the only background work is the one-shot flush
+  below.
+- **What a sync does**: (1) flush the pending-changes queue, oldest first; (2) read the Sheet - every
+  tab's rows, and the referred rows via the Web App; (3) rebuild the pool from what was read,
+  against the task list *as it is at that moment* (so a message that landed mid-sync isn't
+  overwritten); (4) lay any still-unsent changes over the result, so an offline referral isn't
+  "corrected" back into the pool.
+- **All or nothing**: the rebuild happens only if the whole read succeeded. A failure of the tab
+  list, of any single tab's fetch, or of the referred-rows call changes nothing locally and says so.
+  A partial read is indistinguishable from "those tabs are empty / nothing is referred" and would
+  wipe tasks - the per-tab fetch used to turn a failure into an empty tab, which did exactly that.
+- **Pending-changes queue** (`PendingChanges.kt`, persisted in SharedPreferences so it survives the
+  app being killed): every Sheet write goes through it; today that is a referral's `setPriority`
+  (`createRow` for My Tasks "Add task" joins it later - item 9). Entries carry the operation,
+  `taskId`, category, description, link, importance/urgency, and when the user took the action. A
+  newer change for the same row replaces an older unsent one. The action applies locally at once, is
+  queued, and a flush starts immediately (flushes also run at the start of every sync).
+  - **Success** → dequeued, *then* the cross-app message is sent - never before the Sheet has it.
+  - **Row not found** (v1 script error text `No row …`/`No tab named …`, or a v2 `code` of
+    `no_such_row`/`no_such_tab`) → dequeued, no message. The row is gone; the next sync drops the task.
+  - **Network/server failure** → stays queued; later entries are still attempted (they target
+    different rows).
+  - **Retry when the network returns**: a flush that leaves entries behind schedules a one-shot
+    WorkManager job (`PendingFlushWorker`, `NetworkType.CONNECTED`, `ExistingWorkPolicy.REPLACE`)
+    that flushes even if the app isn't open, sends the messages for whatever succeeds, and asks to
+    run again (WorkManager backoff) only while entries remain. Not periodic, no notification, no alarm.
+  - **Visible when stuck**: after a *failed* flush the main screen shows a quiet "N changes waiting
+    to reach your Sheet" line; it is hidden while a flush or sync is running and disappears as soon as
+    the queue empties.
+  - Pointing the app at a **different Sheet** (a Sheet URL that changes on Save or on a QR scan)
+    discards the queue - those writes describe rows of the old Sheet.
+- **Messages between the two apps** (`TaskEvents.kt`, `TaskEventReceiver.kt`):
+  - MicroTasking → ActiveTasks: **`referred`** (`taskId`, category, description, link, importance,
+    urgency), sent after the referral's `setPriority` succeeds. ActiveTasks adds the item.
+  - ActiveTasks → MicroTasking: **`completedForNow`** - clear `referredAt`, the task is back in
+    this app's pool; **`fullyCompleted`** - the row was deleted, drop the task. (Later: `created`.)
+  - A priority change in ActiveTasks is written to the Sheet but not messaged - MicroTasking never
+    displays priority.
+  - **Receiving** writes the single change into the saved task list and does no network work. It
+    works whether the app is on screen, in the background, or not running at all (Android starts the
+    process briefly). If the app is open, a SharedPreferences listener updates the screen in place.
+  - Events are stamped, so a late or duplicate delivery is harmless: a `completedForNow` /
+    `fullyCompleted` whose `eventAtEpochMs` is older than the local task's `referredAt` (it was
+    referred again since) is ignored; `completedForNow` on a task that isn't referred is a no-op.
+    `eventAtEpochMs` is the time of the user's action, not of the queue flush.
+  - A message is the **fast path only**: it can be missed (app force-stopped, reinstalled, aggressive
+    battery management). Nothing depends on it - the sync each time the app becomes visible catches
+    whatever was missed.
+- **Message contract, v1** (identical in both apps' code):
+  - Permission, declared by **both** apps (`<permission android:protectionLevel="signature">` plus
+    `<uses-permission>`, so install order doesn't matter):
+    `com.vernmcgeorge.tasks.permission.TASK_EVENTS`.
+  - Receivers, manifest-declared, `exported="true"`, `android:permission=` the above:
+    `com.activetasks.app.TaskEventReceiver` and `com.microtasking.app.TaskEventReceiver`.
+  - Sent with an explicit component (`Intent.setComponent(ComponentName(<other package>, <other
+    receiver class>))`), action `com.vernmcgeorge.tasks.action.TASK_EVENT`, via
+    `sendBroadcast(intent, <permission>)`. Each manifest has `<queries><package
+    android:name="<other package>"/></queries>`. Sending never throws out to the UI; an uninstalled
+    or unreachable receiver is simply skipped.
+  - Extras: `schemaVersion` (Int, `1`; a receiver ignores a higher version it doesn't know),
+    `event` (String: `referred` | `completedForNow` | `fullyCompleted`), `eventAtEpochMs` (Long),
+    `taskId` (String, may be absent for a pre-`taskId` row), `category` (String, tab name),
+    `description` (String); for `referred` also `link` (String, may be empty), `importance` and
+    `urgency` (Double, raw 0..1).
+  - Matching on receipt: by `taskId` when **both** sides have one (two different taskIds are two
+    different rows - no fallback), else by `category` + `description`, the same identity the Web
+    App uses.
+- **Signing**: MicroTasking's key is unchanged. ActiveTasks switched to this repo's checked-in
+  `keystore/debug.keystore` (same alias/passwords) so the signature-level permission works between
+  the two; Android refuses to update an app across a key change, so ActiveTasks had to be
+  uninstalled once before its first shared-key build.
+- **Not mirrored from ActiveTasks's Settings decisions** (they were made for that app; the user
+  asked for the opposite here earlier the same day): MicroTasking keeps its **Update Tasks** button,
+  and a Sheet QR scan still registers the Sheet and imports immediately, so both codes can be
+  scanned and Update Tasks pressed. Whether to converge them is the user's call.
+- **Known limits**: an offline referral reaches ActiveTasks only when the queue flushes; the
+  legacy single-CSV fallback (tab enumeration blocked) is still treated as a complete read; not yet
+  verified on a device (both apps, signed with the shared key, installed on one device, are needed
+  to exercise the broadcast).
+
 ## Versioning
 - Version string shape: **`major.minor.feature-build`**, e.g. `0.1.8-2`.
   - `major.minor.feature` (`versionBase`, e.g. `0.1.8`) is bumped by hand in
@@ -605,8 +708,8 @@ as `custom-` tasks) becomes the on-the-go entry point:
   practice (ActiveTasks's existing `important*2 + urgency` note says the same about its old boolean
   formula). Whether the warning-only protected range actually blocks a script running "Execute
   as: Me" the way intended, or needs a different protection setup — verify during
-  implementation. Failure-state UX when the referral write-back call fails (offline, Web App
-  misconfigured/undeployed, etc.).
+  implementation. (Failure-state UX for a failed referral write-back: decided 2026-09-24 — the
+  pending-changes queue, see "Synchronization".)
 - Sheet connection & API: whether `ScriptApp.getService().getUrl()` reliably returns the `/exec`
   URL for "Show connection code" (fallback described in that section); exact layout of the new
   Add task / Delete from Sheet / Upload-to-Sheet actions; whether a lost/rotated key needs

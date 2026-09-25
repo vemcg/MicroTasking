@@ -1,4 +1,5 @@
 // Copyright (c) 2026 Vern McGeorge. All rights reserved.
+// Updated 2026-09-24, after version v0.2.0-81 main 2026-09-24
 package com.microtasking.app
 
 import org.junit.Assert.assertEquals
@@ -103,6 +104,16 @@ class TaskPoolTest {
         val read = readManagedTasks(org.json.JSONArray().put(withoutField).toString())
 
         assertEquals(null, read.single().referredAt)
+    }
+
+    @Test
+    fun link_roundTripsThroughStorage_andAnOlderEntryWithoutOneReadsAsEmpty() {
+        val task = builtInTasks.first().copy(link = "https://example.com/how-to")
+
+        assertEquals("https://example.com/how-to", readManagedTasks(writeManagedTasks(listOf(task))).single().link)
+
+        val withoutField = org.json.JSONArray(writeManagedTasks(listOf(task))).getJSONObject(0).apply { remove("link") }
+        assertEquals("", readManagedTasks(org.json.JSONArray().put(withoutField).toString()).single().link)
     }
 
     @Test
