@@ -169,10 +169,12 @@ class MainActivity : ComponentActivity() {
                             // ordinary settings edit later must not silently clobber a manual
                             // pause (see DEFECTS.md item 4).
                             val wasSetupComplete = preferences.getBoolean("setup_complete", false)
-                            val before = "window=${preferences.getString("start_hour", "9")}-" +
-                                "${preferences.getString("end_hour", "21")} " +
-                                "prompts=${preferences.getString("prompts_per_day", "6")} " +
-                                "queueSize=${preferences.getInt("max_task_queue_size", 3)} " +
+                            val oldStartHour = preferences.getString("start_hour", "9") ?: "9"
+                            val oldEndHour = preferences.getString("end_hour", "21") ?: "21"
+                            val oldPromptsPerDay = preferences.getString("prompts_per_day", "6") ?: "6"
+                            val oldMaxQueueSize = preferences.getInt("max_task_queue_size", 3)
+                            val before = "window=$oldStartHour-$oldEndHour prompts=$oldPromptsPerDay " +
+                                "queueSize=$oldMaxQueueSize " +
                                 "categories=${preferences.getStringSet("selected_categories", emptySet())?.sorted()}"
                             val after = "window=$start-$end prompts=$prompts queueSize=$maxQueueSize " +
                                 "categories=${categories.sorted()}"
@@ -188,6 +190,18 @@ class MainActivity : ComponentActivity() {
                                 .putInt("max_task_queue_size", maxQueueSize)
                                 .putString("external_sheet_url", sheetUrl)
                             if (!wasSetupComplete) editor.putBoolean("background_prompts_enabled", true)
+                            // See pacingSettingsChanged: a window/prompts/queue-size change leaves an
+                            // already-armed next_dispatch_epoch_ms stale (computed from the values just
+                            // replaced) - clear it so the tick that follows this save (MicroTaskingApp's
+                            // LaunchedEffect, keyed on these same fields) recomputes fresh instead of the
+                            // "already armed" gate in TaskDelivery.tick treating it as nothing to do.
+                            if (wasSetupComplete && pacingSettingsChanged(
+                                    oldStartHour, oldEndHour, oldPromptsPerDay, oldMaxQueueSize,
+                                    start, end, prompts, maxQueueSize
+                                )
+                            ) {
+                                editor.remove("next_dispatch_epoch_ms")
+                            }
                             editor.apply()
                         },
                         onUserTasksSaved = { userTasks ->

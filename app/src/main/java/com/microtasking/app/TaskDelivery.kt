@@ -1,4 +1,5 @@
 // Copyright (c) 2026 Vern McGeorge. All rights reserved.
+// Updated 2026-09-25, after version v0.2.0-84 main 2026-09-25
 package com.microtasking.app
 
 import android.content.Context
@@ -30,6 +31,26 @@ fun writeUserTasks(tasks: List<UserTask>): String = JSONArray().apply {
         })
     }
 }.toString()
+
+/**
+ * Whether a Settings save changed anything that feeds the pacing math
+ * ([TaskScheduling.millisUntilWindowOpens] / [TaskScheduling.fixedDispatchIntervalMillis]) - the
+ * window hours, prompts-per-day, or queue size. Category selection is deliberately excluded: it
+ * doesn't feed that math, so a category-only change has nothing stale to invalidate.
+ *
+ * If any of these actually changed, an already-armed `next_dispatch_epoch_ms` was computed from
+ * the values just replaced and must be cleared - see the call site in `MainActivity.onCreate`'s
+ * `onSettingsSaved`. Left alone, the "already armed" gate in [TaskDelivery.tick] (DEFECTS.md item
+ * 5, which exists to stop redundant dispatch on reopen/Resume/vacation-toggle) treats the
+ * still-future stale value as nothing to do, so the on-screen countdown keeps showing a time
+ * computed under the window that was just replaced in Settings.
+ */
+fun pacingSettingsChanged(
+    oldStartHour: String, oldEndHour: String, oldPromptsPerDay: String, oldMaxQueueSize: Int,
+    newStartHour: String, newEndHour: String, newPromptsPerDay: String, newMaxQueueSize: Int
+): Boolean =
+    oldStartHour != newStartHour || oldEndHour != newEndHour ||
+        oldPromptsPerDay != newPromptsPerDay || oldMaxQueueSize != newMaxQueueSize
 
 fun eligiblePromptTasks(
     managedTasks: List<ManagedTask>,
