@@ -27,7 +27,7 @@ auto-trigger the release workflow): `gh workflow run "Build & release APK" --ref
 
 ## Build tracking (user-requested convention, 2026-09-24)
 
-- **Last built version:** `v0.2.0-84` (branch `main`, built 2026-09-25). At the
+- **Last built version:** `v0.2.0-85` (branch `bug-hunt`, built 2026-09-25). At the
   start of every session, note this as the current known state before doing anything else. After
   triggering a build and confirming it went live (`gh run list` / the new GitHub Release), update
   this line to the new version/branch/date — don't leave it stale once a newer build exists.
