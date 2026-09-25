@@ -524,7 +524,10 @@ fun MicroTaskingApp(
             // belongs to the old one, so it's dropped (a follow-up sync of the new Sheet is queued).
             val superseded = generationAtStart != sheetGeneration
             var applied = false
-            val importedTasks = result.tasks
+            // A row this device removed moments ago via an incoming "fullyCompleted" event must not
+            // be resurrected by a sync that happens to catch a stale/lagged CSV cache read - see
+            // RecentlyRemovedTasks.kt / DEFECTS.md item 8.
+            val importedTasks = filterResurrectedRows(result.tasks, RecentlyRemovedTasks.current(context), System.currentTimeMillis())
             // A sheet that still only has the Apps Script's default "Sheet1" hasn't been set up yet.
             val blankDefaultSheet = importedTasks.isEmpty() &&
                 result.tabNames.size == 1 && result.tabNames.single().equals("Sheet1", ignoreCase = true)
