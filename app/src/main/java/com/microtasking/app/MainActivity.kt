@@ -51,6 +51,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Settings
+import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLDecoder
 import java.net.URLEncoder
@@ -499,6 +500,10 @@ fun MicroTaskingApp(
         referredDuringSync.clear()
         val webAppUrlAtStart = savedWebAppUrl
         val generationAtStart = sheetGeneration
+        // Same reasoning as startFlush() above: scheduled eagerly, before this coroutine's own
+        // Step 1 flush attempt, so a process freeze mid-sync still leaves a guaranteed retry armed
+        // (DEFECTS.md item 9).
+        if (webAppUrlAtStart.isNotBlank()) PendingFlushScheduler.schedule(context)
         coroutineScope.launch {
             // All the network work happens here, off the main thread, touching no UI state.
             // Step 1: flush the pending-changes queue, so our own unsent writes reach the Sheet
@@ -513,7 +518,6 @@ fun MicroTaskingApp(
                 FetchedSheet(stillQueued, sheet, referred)
             }
             pendingChangeCount = fetch.stillQueued
-            if (fetch.stillQueued > 0 && webAppUrlAtStart.isNotBlank()) PendingFlushScheduler.schedule(context)
             isImportingSheet = false
             val result = fetch.sheet
             // All or nothing (SPEC.md "Synchronization"): if any part of the read failed - a tab, the
@@ -595,16 +599,26 @@ fun MicroTaskingApp(
     }
 
     // Flushes the pending-changes queue now, in the background; if anything is left behind (offline,
-    // or the Web App had trouble) asks WorkManager to try again once the network is back. While it
+    // or the Web App had trouble) WorkManager tries again once the network is back. While it
     // runs the "N changes waiting" line stays hidden - it only means something after a flush FAILED.
     fun startFlush() {
         if (savedWebAppUrl.isBlank()) return
+        // Scheduled eagerly, unconditionally, before the coroutine below - not only once that
+        // coroutine survives to finish and notices something's still queued. Android can freeze a
+        // backgrounded process's threads entirely (no CPU time, network included) before a plain
+        // coroutine like this one ever gets to run, e.g. the user switches to ActiveTasks right
+        // after taking the action that called this - so without a retry path already armed, the
+        // change could sit unsent until something unrelated wakes the process. enqueueUniqueWork +
+        // REPLACE (PendingFlushWorker.kt) makes this cheap and safe to call every time: it just
+        // replaces whatever's already scheduled, and the worker itself no-ops immediately if there's
+        // nothing left to send. Found jointly with ActiveTasks - their TaskStore.requestFlush had
+        // the identical shape. See DEFECTS.md item 9.
+        PendingFlushScheduler.schedule(context)
         flushesRunning++
         coroutineScope.launch {
             val stillQueued = withContext(Dispatchers.IO) { PendingChanges.flushToSheet(context) }
             flushesRunning--
             pendingChangeCount = stillQueued
-            if (stillQueued > 0) PendingFlushScheduler.schedule(context)
         }
     }
 
@@ -2300,6 +2314,21 @@ private fun unescapeXmlEntities(text: String): String = text
     .replace("&lt;", "<")
     .replace("&gt;", ">")
 
+// Matches WebAppClient's own timeouts (ReferralBridge.kt) - a bare URL.openStream()/readText()
+// has no timeout at all (0 = wait forever), so a stalled connection hangs indefinitely instead of
+// failing fast into the existing runCatching/retry-next-sync path (DEFECTS.md item 9).
+private const val SHEET_READ_CONNECT_TIMEOUT_MS = 15_000
+private const val SHEET_READ_TIMEOUT_MS = 15_000
+
+private fun openTimedConnection(url: URL): HttpURLConnection =
+    (url.openConnection() as HttpURLConnection).apply {
+        connectTimeout = SHEET_READ_CONNECT_TIMEOUT_MS
+        readTimeout = SHEET_READ_TIMEOUT_MS
+    }
+
+private fun readTextTimed(url: URL): String =
+    openTimedConnection(url).inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+
 /**
  * Lists the spreadsheet's tab names in order by downloading the full workbook as .xlsx (a
  * plain still-supported export, unlike the old GData worksheets feed below) and reading the
@@ -2308,7 +2337,7 @@ private fun unescapeXmlEntities(text: String): String = text
  */
 private fun fetchSheetTabNamesViaXlsx(spreadsheetId: String): List<String> = runCatching {
     val url = URL("https://docs.google.com/spreadsheets/d/$spreadsheetId/export?format=xlsx")
-    java.util.zip.ZipInputStream(url.openStream()).use { zip ->
+    java.util.zip.ZipInputStream(openTimedConnection(url).inputStream).use { zip ->
         var entry = zip.nextEntry
         while (entry != null) {
             if (entry.name == "xl/workbook.xml") {
@@ -2326,7 +2355,7 @@ private fun fetchSheetTabNamesViaXlsx(spreadsheetId: String): List<String> = run
 /** Lists the spreadsheet's tab names via the legacy public worksheet feed - kept as a secondary attempt since Google has deprecated this GData API for many accounts. */
 private fun fetchSheetTabNames(spreadsheetId: String): List<String> = runCatching {
     val feedUrl = "https://spreadsheets.google.com/feeds/worksheets/$spreadsheetId/public/basic?alt=json"
-    val feed = JSONObject(URL(feedUrl).readText()).optJSONObject("feed") ?: return@runCatching emptyList()
+    val feed = JSONObject(readTextTimed(URL(feedUrl))).optJSONObject("feed") ?: return@runCatching emptyList()
     val entries = when (val entry = feed.opt("entry")) {
         is JSONArray -> entry
         is JSONObject -> JSONArray().put(entry)
@@ -2343,7 +2372,7 @@ private fun fetchSheetTabNames(spreadsheetId: String): List<String> = runCatchin
 private fun fetchSheetTabCsv(spreadsheetId: String, tabName: String): String? = runCatching {
     val encodedName = URLEncoder.encode(tabName, "UTF-8")
     val url = "https://docs.google.com/spreadsheets/d/$spreadsheetId/gviz/tq?tqx=out:csv&sheet=$encodedName"
-    URL(url).readText()
+    readTextTimed(URL(url))
 }.getOrNull()
 
 /**
@@ -2404,7 +2433,7 @@ fun importExternalTasksFromSheet(url: String): SheetImportResult {
     // CSV export so import still works, just without per-tab categories. A failed fetch here is a
     // failed read, not an empty Sheet.
     val fallback = runCatching {
-        val csv = URL(normalizeGoogleSheetCsvUrl(url)).readText()
+        val csv = readTextTimed(URL(normalizeGoogleSheetCsvUrl(url)))
         parseExternalTaskCsv(csv, "Imported")
     }
     return if (fallback.isSuccess) SheetImportResult(fallback.getOrThrow(), emptyList())
