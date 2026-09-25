@@ -1,4 +1,5 @@
 // Copyright (c) 2026 Vern McGeorge. All rights reserved.
+// Updated 2026-09-24, after version v0.2.0-81 main 2026-09-24
 package com.microtasking.app
 
 import org.junit.Assert.assertEquals
@@ -7,6 +8,54 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ExternalTaskImportTest {
+    // A sync is all-or-nothing (SPEC.md "Synchronization"): a failed tab fetch must never read as
+    // "that tab is empty", because the merge would then delete the tab's tasks.
+
+    @Test
+    fun assembleSheetImport_oneFailedTabFailsTheWholeRead() {
+        val csvByTab = mapOf(
+            "Cleaning" to "TRUE,Description,Link\nTRUE,Wipe the counters,",
+            "Errands" to null // this fetch failed
+        )
+
+        val result = assembleSheetImport(listOf("Cleaning", "Errands")) { csvByTab[it] }
+
+        assertTrue(result.failed)
+        assertTrue("nothing from a partial read is handed back to be merged", result.tasks.isEmpty())
+    }
+
+    @Test
+    fun assembleSheetImport_aTabThatIsReadFineButHasNoRowsIsNotAFailure() {
+        val result = assembleSheetImport(listOf("Cleaning", "Empty")) {
+            if (it == "Cleaning") "TRUE,Description,Link\nTRUE,Wipe the counters," else ""
+        }
+
+        assertFalse(result.failed)
+        assertEquals(listOf("Wipe the counters"), result.tasks.map { it.description })
+        assertEquals(listOf("Cleaning", "Empty"), result.tabNames)
+    }
+
+    @Test
+    fun assembleSheetImport_everyTabReadIsCombinedInSheetOrder() {
+        val result = assembleSheetImport(listOf("B", "A")) { "TRUE,Description,Link\nTRUE,Task in $it," }
+
+        assertFalse(result.failed)
+        assertEquals(listOf("B", "A"), result.tasks.map { it.category })
+    }
+
+    @Test
+    fun parseExternalTaskCsv_carriesTheRowsLinkOntoTheTask() {
+        val csv = """
+            TRUE,Description,Link
+            TRUE,Watch the demo,https://example.com/demo
+            TRUE,No link here,
+        """.trimIndent()
+
+        val tasks = parseExternalTaskCsv(csv, "Health")
+
+        assertEquals(listOf("https://example.com/demo", ""), tasks.map { it.link })
+    }
+
     @Test
     fun normalizeGoogleSheetCsvUrl_convertsEditLinkToExportUrl() {
         val input = "https://docs.google.com/spreadsheets/d/abc123/edit?usp=sharing#gid=456"

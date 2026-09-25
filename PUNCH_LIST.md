@@ -194,3 +194,38 @@ Next work session: make onboarding, import, the spreadsheet template, persistenc
       no Node test harness for the script (item 9 Phase 1 step 7), and whether ActiveTasks added
       the equivalent `LazyColumn` de-dup guard + a way to clear a permanently-stuck item is that
       session's own call - not re-verified here.
+
+11. **Synchronization (cross-app, all-or-nothing sync, pending-changes queue)** — *built
+    2026-09-24 on branch `synchronization-improvements`; not yet verified on a device.* Full design
+    in `SPEC.md` "Synchronization" (mirror of `ActiveTasks/SPEC.md` "Synchronization", specified
+    with that session the same day). Built here:
+    - **All-or-nothing sync.** `assembleSheetImport` fails the whole read if any tab's fetch fails
+      (`fetchSheetTabCsv` now returns null on failure instead of `""`, which used to read as "that
+      tab is empty" and silently dropped its tasks); a failed referred-rows call aborts too; nothing
+      is applied until everything is in, and the merge runs against the task list as it is at that
+      moment.
+    - **Pending-changes queue** (`PendingChanges.kt`, persisted): a referral applies locally at once
+      and its `setPriority` is queued; flushed immediately and at the start of every sync; success →
+      dequeue then message, row-not-found (`isRowNotFound`, v1 error text or v2 code) → dequeue, no
+      message, failure → stays; unsent changes are laid over each sync (`applyPendingOverlay`);
+      one-shot `PendingFlushWorker` (WorkManager, network-connected) retries; "N changes waiting to
+      reach your Sheet" on the main screen after a failed flush. Discarded when the Sheet changes.
+    - **Cross-app messages** (`TaskEvents.kt`, `TaskEventReceiver.kt`, manifest permission +
+      `<queries>` + exported receiver): sends `referred` after the write succeeds; receives
+      `completedForNow` / `fullyCompleted` with stamped-event staleness rules; the open screen
+      updates in place via a prefs listener. `ManagedTask` gained `link` so `referred` carries it.
+    - 45 new unit tests (queue rules/flush outcomes/overlay, contract wire format, decode/apply,
+      receiver end-to-end, all-or-nothing import); merged-manifest checked on a debug build.
+    - **Settings converged with ActiveTasks (2026-09-24, at the user's request, after the first
+      build):** no Update Tasks button; a QR scan only fills the Settings draft (the scanner runs
+      inside `SettingsScreen`, so other edits survive a scan); Save Settings with a changed Sheet or
+      Web App URL saves, shows "Syncing…", and returns to the main screen on success or stays open
+      with the reason on failure; a different Sheet (different spreadsheet id) discards the pending
+      queue, imported tasks and on-screen queue first, and a sync in flight for the old Sheet is
+      dropped. The onboarding page's step 4 and the Sheet README were reworded to match.
+    - **Not done / open**: (1) On-device verification of the broadcast between the two shared-key
+      installs, of the WorkManager retry, of the Save-driven sync, and of an offline referral end to
+      end. (2) A pre-existing gap this doesn't close: when tab enumeration is blocked the legacy
+      single-CSV fallback is still accepted as a complete read. (3) `createRow` (My Tasks "Add task")
+      should join the queue when item 9's Phase 2 is built. (4) A Sheet switch keeps
+      `selected_categories` (names from the old Sheet) - they aren't pruned until the user edits them.

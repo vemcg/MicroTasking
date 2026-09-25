@@ -27,10 +27,14 @@ auto-trigger the release workflow): `gh workflow run "Build & release APK" --ref
 
 ## Build tracking (user-requested convention, 2026-09-24)
 
-- **Last built version:** `v0.2.0-80` (branch `main`, built 2026-09-24). At the
+- **Last built version:** `v0.2.0-83` (branch `synchronization-improvements`, built 2026-09-25). At the
   start of every session, note this as the current known state before doing anything else. After
   triggering a build and confirming it went live (`gh run list` / the new GitHub Release), update
   this line to the new version/branch/date — don't leave it stale once a newer build exists.
+  **Gotcha:** any push to `main` auto-triggers the release workflow (`on: push: branches: [main]`),
+  including a docs-only commit that just updates this line - so pushing the update to `main`
+  directly makes it stale again immediately. Fold the correction into the first commit of whatever
+  branch comes next instead of chasing it with another `main` push.
 - **Copyright-comment convention, from 2026-09-24 forward:** when editing a file that already
   carries this project's own `Copyright (c) <year> Vern McGeorge` header (not the Gradle wrapper's
   or `LICENSE`'s), add or update a line directly under it reading `Updated <date>, after version
