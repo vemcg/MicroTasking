@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Vern McGeorge. All rights reserved.
-// Updated 2026-09-24, after version v0.2.0-82 synchronization-improvements 2026-09-25
+// Updated 2026-09-25, after version v0.2.0-84 main 2026-09-25
 package com.microtasking.app
 
 import android.Manifest
@@ -51,6 +51,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Settings
+import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLDecoder
 import java.net.URLEncoder
@@ -169,10 +170,12 @@ class MainActivity : ComponentActivity() {
                             // ordinary settings edit later must not silently clobber a manual
                             // pause (see DEFECTS.md item 4).
                             val wasSetupComplete = preferences.getBoolean("setup_complete", false)
-                            val before = "window=${preferences.getString("start_hour", "9")}-" +
-                                "${preferences.getString("end_hour", "21")} " +
-                                "prompts=${preferences.getString("prompts_per_day", "6")} " +
-                                "queueSize=${preferences.getInt("max_task_queue_size", 3)} " +
+                            val oldStartHour = preferences.getString("start_hour", "9") ?: "9"
+                            val oldEndHour = preferences.getString("end_hour", "21") ?: "21"
+                            val oldPromptsPerDay = preferences.getString("prompts_per_day", "6") ?: "6"
+                            val oldMaxQueueSize = preferences.getInt("max_task_queue_size", 3)
+                            val before = "window=$oldStartHour-$oldEndHour prompts=$oldPromptsPerDay " +
+                                "queueSize=$oldMaxQueueSize " +
                                 "categories=${preferences.getStringSet("selected_categories", emptySet())?.sorted()}"
                             val after = "window=$start-$end prompts=$prompts queueSize=$maxQueueSize " +
                                 "categories=${categories.sorted()}"
@@ -188,6 +191,18 @@ class MainActivity : ComponentActivity() {
                                 .putInt("max_task_queue_size", maxQueueSize)
                                 .putString("external_sheet_url", sheetUrl)
                             if (!wasSetupComplete) editor.putBoolean("background_prompts_enabled", true)
+                            // See pacingSettingsChanged: a window/prompts/queue-size change leaves an
+                            // already-armed next_dispatch_epoch_ms stale (computed from the values just
+                            // replaced) - clear it so the tick that follows this save (MicroTaskingApp's
+                            // LaunchedEffect, keyed on these same fields) recomputes fresh instead of the
+                            // "already armed" gate in TaskDelivery.tick treating it as nothing to do.
+                            if (wasSetupComplete && pacingSettingsChanged(
+                                    oldStartHour, oldEndHour, oldPromptsPerDay, oldMaxQueueSize,
+                                    start, end, prompts, maxQueueSize
+                                )
+                            ) {
+                                editor.remove("next_dispatch_epoch_ms")
+                            }
                             editor.apply()
                         },
                         onUserTasksSaved = { userTasks ->
@@ -485,6 +500,10 @@ fun MicroTaskingApp(
         referredDuringSync.clear()
         val webAppUrlAtStart = savedWebAppUrl
         val generationAtStart = sheetGeneration
+        // Same reasoning as startFlush() above: scheduled eagerly, before this coroutine's own
+        // Step 1 flush attempt, so a process freeze mid-sync still leaves a guaranteed retry armed
+        // (DEFECTS.md item 9).
+        if (webAppUrlAtStart.isNotBlank()) PendingFlushScheduler.schedule(context)
         coroutineScope.launch {
             // All the network work happens here, off the main thread, touching no UI state.
             // Step 1: flush the pending-changes queue, so our own unsent writes reach the Sheet
@@ -499,7 +518,6 @@ fun MicroTaskingApp(
                 FetchedSheet(stillQueued, sheet, referred)
             }
             pendingChangeCount = fetch.stillQueued
-            if (fetch.stillQueued > 0 && webAppUrlAtStart.isNotBlank()) PendingFlushScheduler.schedule(context)
             isImportingSheet = false
             val result = fetch.sheet
             // All or nothing (SPEC.md "Synchronization"): if any part of the read failed - a tab, the
@@ -510,7 +528,10 @@ fun MicroTaskingApp(
             // belongs to the old one, so it's dropped (a follow-up sync of the new Sheet is queued).
             val superseded = generationAtStart != sheetGeneration
             var applied = false
-            val importedTasks = result.tasks
+            // A row this device removed moments ago via an incoming "fullyCompleted" event must not
+            // be resurrected by a sync that happens to catch a stale/lagged CSV cache read - see
+            // RecentlyRemovedTasks.kt / DEFECTS.md item 8.
+            val importedTasks = filterResurrectedRows(result.tasks, RecentlyRemovedTasks.current(context), System.currentTimeMillis())
             // A sheet that still only has the Apps Script's default "Sheet1" hasn't been set up yet.
             val blankDefaultSheet = importedTasks.isEmpty() &&
                 result.tabNames.size == 1 && result.tabNames.single().equals("Sheet1", ignoreCase = true)
@@ -578,16 +599,26 @@ fun MicroTaskingApp(
     }
 
     // Flushes the pending-changes queue now, in the background; if anything is left behind (offline,
-    // or the Web App had trouble) asks WorkManager to try again once the network is back. While it
+    // or the Web App had trouble) WorkManager tries again once the network is back. While it
     // runs the "N changes waiting" line stays hidden - it only means something after a flush FAILED.
     fun startFlush() {
         if (savedWebAppUrl.isBlank()) return
+        // Scheduled eagerly, unconditionally, before the coroutine below - not only once that
+        // coroutine survives to finish and notices something's still queued. Android can freeze a
+        // backgrounded process's threads entirely (no CPU time, network included) before a plain
+        // coroutine like this one ever gets to run, e.g. the user switches to ActiveTasks right
+        // after taking the action that called this - so without a retry path already armed, the
+        // change could sit unsent until something unrelated wakes the process. enqueueUniqueWork +
+        // REPLACE (PendingFlushWorker.kt) makes this cheap and safe to call every time: it just
+        // replaces whatever's already scheduled, and the worker itself no-ops immediately if there's
+        // nothing left to send. Found jointly with ActiveTasks - their TaskStore.requestFlush had
+        // the identical shape. See DEFECTS.md item 9.
+        PendingFlushScheduler.schedule(context)
         flushesRunning++
         coroutineScope.launch {
             val stillQueued = withContext(Dispatchers.IO) { PendingChanges.flushToSheet(context) }
             flushesRunning--
             pendingChangeCount = stillQueued
-            if (stillQueued > 0) PendingFlushScheduler.schedule(context)
         }
     }
 
@@ -680,9 +711,16 @@ fun MicroTaskingApp(
         savedPromptsPerDay,
         savedMaxQueueSize
     ) {
-        if (promptTasks.isEmpty()) {
-            return@LaunchedEffect
-        }
+        // DEFECTS.md item 7: this used to return@LaunchedEffect right here when promptTasks was
+        // empty - which also skipped the poll loop below, freezing clockMillis (and with it the
+        // on-screen countdown, and the window-open transition, and everything else that depends on
+        // recomposition being driven by it) for good until something made the pool non-empty again.
+        // Not needed for safety: TaskDelivery.tick already no-ops harmlessly on an empty pool
+        // (loadSettings returns null the moment eligiblePromptTasks is empty, before touching
+        // next_dispatch_epoch_ms or anything else) - so there's nothing here that actually needs
+        // guarding against an empty pool. The clock must keep running regardless, since it's also
+        // what makes the "No tasks available" message (see countdownText) live instead of frozen.
+        //
         // Tick once on entry so a window opening (or a settings change) dispatches immediately
         // rather than waiting out a whole interval first. Harmless to call redundantly (e.g. every
         // time this activity is reopened) - tick() itself no-ops if the last real dispatch already
@@ -691,7 +729,8 @@ fun MicroTaskingApp(
         withContext(Dispatchers.IO) { TaskDelivery.tick(context) }
         refreshFromPrefs()
         // 1s poll: cheap while foregrounded (screen is on), doubles as the countdown clock, and
-        // lets a force-dispatch tap take effect within a second by just rewriting the epoch.
+        // lets a force-dispatch tap take effect within a second by just rewriting the epoch. Keeps
+        // running even with nothing eligible to dispatch - see the item 7 note above.
         while (true) {
             delay(1_000L)
             clockMillis = System.currentTimeMillis()
@@ -863,19 +902,32 @@ fun MicroTaskingApp(
             )
         }
     } else {
+        // Read live off the clock/settings every recomposition (clockMillis ticking every second
+        // while foregrounded drives that), not from next_dispatch_epoch_ms - see
+        // windowOpensInMillis below for why.
+        val nowForWindow = LocalDateTime.now()
+        val startHourForWindow = (savedStartHour.toIntOrNull() ?: 9).coerceIn(0, 24)
+        val endHourForWindow = (savedEndHour.toIntOrNull() ?: 21).coerceIn(0, 24)
+        val isWithinWindowNow = isWithinActiveWindow(nowForWindow, startHourForWindow, endHourForWindow)
         TaskPromptScreen(
             taskEntries = visibleTaskEntries,
             streak = streak,
             maxQueueSize = savedMaxQueueSize,
             promptsPerDay = savedPromptsPerDay.toIntOrNull() ?: 0,
             nextDispatchEpoch = nextDispatchEpoch,
+            // DEFECTS.md item 7: nothing is, or ever will be, eligible to dispatch - distinct from
+            // every other countdown case below, which all assume there's a real pool to pick from.
+            hasEligibleTasks = promptTasks.isNotEmpty(),
+            // DEFECTS.md item 6: next_dispatch_epoch_ms also doubles as the pacing interval a
+            // forced tap outside the window arms for the background alarm (fixedDispatchIntervalMillis
+            // - a fixed cadence unrelated to window-open timing, per its own doc comment), so it's
+            // not safe to read for "when does the window open" any more. This is computed
+            // independently and live instead, exactly like isWithinWindowNow already is, so no
+            // forced tap can throw it off.
+            windowOpensInMillis = if (isWithinWindowNow) null else millisUntilWindowOpens(nowForWindow, startHourForWindow, endHourForWindow),
             clockMillis = clockMillis,
             queueFullFlash = clockMillis < queueFullFlashUntil,
-            withinWindow = isWithinActiveWindow(
-                LocalDateTime.now(),
-                (savedStartHour.toIntOrNull() ?: 9).coerceIn(0, 24),
-                (savedEndHour.toIntOrNull() ?: 21).coerceIn(0, 24)
-            ),
+            withinWindow = isWithinWindowNow,
             vacationMode = vacationMode,
             onForceDispatch = { forceDispatchNow() },
             onOpenSettings = { showingSettings = true },
@@ -975,6 +1027,15 @@ fun TaskPromptScreen(
     maxQueueSize: Int,
     promptsPerDay: Int,
     nextDispatchEpoch: Long?,
+    // DEFECTS.md item 7: true once there's nothing eligible to ever dispatch (no category
+    // selected, or every selected category is empty/disabled) - takes priority over every other
+    // countdown case, all of which assume there's a real pool behind them.
+    hasEligibleTasks: Boolean,
+    // Millis until the active window opens, computed live off the clock/settings (see the call
+    // site) - null while inside the window. DEFECTS.md item 6: deliberately NOT derived from
+    // nextDispatchEpoch, which a forced tap outside the window repurposes as a pacing interval
+    // for the background alarm, unrelated to when the window actually opens.
+    windowOpensInMillis: Long?,
     clockMillis: Long,
     queueFullFlash: Boolean,
     withinWindow: Boolean,
@@ -1103,9 +1164,10 @@ fun TaskPromptScreen(
             queueFullFlash -> "Queue full — finish one first"
             vacationMode -> "Hard paused — uncheck it in Settings to resume"
             promptsPerDay <= 0 -> "Automatic prompts off — set \"prompts per day\""
+            !hasEligibleTasks -> "No tasks available — check your enabled categories in Settings"
             !backgroundPromptsRunning && withinWindow -> "Paused — tap for a task now"
-            !withinWindow && nextDispatchEpoch != null ->
-                "Window opens in ${formatCountdown(nextDispatchEpoch - clockMillis)} — tap for one now"
+            !withinWindow && windowOpensInMillis != null ->
+                "Window opens in ${formatCountdown(windowOpensInMillis)} — tap for one now"
             nextDispatchEpoch != null ->
                 "Next task in ${formatCountdown(nextDispatchEpoch - clockMillis)} — tap for it now"
             else -> "Tap for a task now"
@@ -2252,6 +2314,21 @@ private fun unescapeXmlEntities(text: String): String = text
     .replace("&lt;", "<")
     .replace("&gt;", ">")
 
+// Matches WebAppClient's own timeouts (ReferralBridge.kt) - a bare URL.openStream()/readText()
+// has no timeout at all (0 = wait forever), so a stalled connection hangs indefinitely instead of
+// failing fast into the existing runCatching/retry-next-sync path (DEFECTS.md item 9).
+private const val SHEET_READ_CONNECT_TIMEOUT_MS = 15_000
+private const val SHEET_READ_TIMEOUT_MS = 15_000
+
+private fun openTimedConnection(url: URL): HttpURLConnection =
+    (url.openConnection() as HttpURLConnection).apply {
+        connectTimeout = SHEET_READ_CONNECT_TIMEOUT_MS
+        readTimeout = SHEET_READ_TIMEOUT_MS
+    }
+
+private fun readTextTimed(url: URL): String =
+    openTimedConnection(url).inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+
 /**
  * Lists the spreadsheet's tab names in order by downloading the full workbook as .xlsx (a
  * plain still-supported export, unlike the old GData worksheets feed below) and reading the
@@ -2260,7 +2337,7 @@ private fun unescapeXmlEntities(text: String): String = text
  */
 private fun fetchSheetTabNamesViaXlsx(spreadsheetId: String): List<String> = runCatching {
     val url = URL("https://docs.google.com/spreadsheets/d/$spreadsheetId/export?format=xlsx")
-    java.util.zip.ZipInputStream(url.openStream()).use { zip ->
+    java.util.zip.ZipInputStream(openTimedConnection(url).inputStream).use { zip ->
         var entry = zip.nextEntry
         while (entry != null) {
             if (entry.name == "xl/workbook.xml") {
@@ -2278,7 +2355,7 @@ private fun fetchSheetTabNamesViaXlsx(spreadsheetId: String): List<String> = run
 /** Lists the spreadsheet's tab names via the legacy public worksheet feed - kept as a secondary attempt since Google has deprecated this GData API for many accounts. */
 private fun fetchSheetTabNames(spreadsheetId: String): List<String> = runCatching {
     val feedUrl = "https://spreadsheets.google.com/feeds/worksheets/$spreadsheetId/public/basic?alt=json"
-    val feed = JSONObject(URL(feedUrl).readText()).optJSONObject("feed") ?: return@runCatching emptyList()
+    val feed = JSONObject(readTextTimed(URL(feedUrl))).optJSONObject("feed") ?: return@runCatching emptyList()
     val entries = when (val entry = feed.opt("entry")) {
         is JSONArray -> entry
         is JSONObject -> JSONArray().put(entry)
@@ -2295,7 +2372,7 @@ private fun fetchSheetTabNames(spreadsheetId: String): List<String> = runCatchin
 private fun fetchSheetTabCsv(spreadsheetId: String, tabName: String): String? = runCatching {
     val encodedName = URLEncoder.encode(tabName, "UTF-8")
     val url = "https://docs.google.com/spreadsheets/d/$spreadsheetId/gviz/tq?tqx=out:csv&sheet=$encodedName"
-    URL(url).readText()
+    readTextTimed(URL(url))
 }.getOrNull()
 
 /**
@@ -2356,7 +2433,7 @@ fun importExternalTasksFromSheet(url: String): SheetImportResult {
     // CSV export so import still works, just without per-tab categories. A failed fetch here is a
     // failed read, not an empty Sheet.
     val fallback = runCatching {
-        val csv = URL(normalizeGoogleSheetCsvUrl(url)).readText()
+        val csv = readTextTimed(URL(normalizeGoogleSheetCsvUrl(url)))
         parseExternalTaskCsv(csv, "Imported")
     }
     return if (fallback.isSuccess) SheetImportResult(fallback.getOrThrow(), emptyList())

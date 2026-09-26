@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Vern McGeorge. All rights reserved.
-// Updated 2026-09-24, after version v0.2.0-81 main 2026-09-24
+// Updated 2026-09-25, after version v0.2.0-84 main 2026-09-25
 package com.microtasking.app
 
 import android.content.BroadcastReceiver
@@ -27,6 +27,12 @@ class TaskEventReceiver : BroadcastReceiver() {
             val updated = applyIncomingEvent(tasks, event)
             val changed = updated != tasks
             if (changed) prefs.edit().putString("managed_tasks", writeManagedTasks(updated)).apply()
+            // The Sheet row is gone, but a sync that catches a stale/lagged CSV cache read could
+            // still resurrect it locally - remember it briefly so that read gets filtered. See
+            // RecentlyRemovedTasks.kt / DEFECTS.md item 8.
+            if (changed && event.event == TaskEventContract.EVENT_FULLY_COMPLETED) {
+                RecentlyRemovedTasks.markRemoved(context, event.taskId ?: WebAppClient.rowKey(event.category, event.description))
+            }
             DiagnosticLog.log(
                 context, "TASK_EVENT_RECEIVED",
                 "event=${event.event} task=${event.taskId ?: event.description} category=${event.category} applied=$changed"
