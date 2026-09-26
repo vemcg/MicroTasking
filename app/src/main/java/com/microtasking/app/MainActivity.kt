@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Vern McGeorge. All rights reserved.
-// Updated 2026-09-25, after version v0.2.0-84 main 2026-09-25
+// Updated 2026-09-26, after version v0.2.0-86 main 2026-09-26
 package com.microtasking.app
 
 import android.Manifest
@@ -41,6 +41,15 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -1103,47 +1112,46 @@ fun TaskPromptScreen(
             // hard crash, so the index keeps it safe even if a stale/corrupt queue slips one in.
             itemsIndexed(taskEntries, key = { index, entry -> "${entry.task.id}#$index" }) { _, entry ->
                 val task = entry.task
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 2.dp),
-                ) {
-                    Text(
-                        text = task.description,
-                        modifier = Modifier.padding(vertical = 6.dp),
-                        style = MaterialTheme.typography.headlineSmall
-                    )
-                    Text(
-                        text = if (entry.state == TaskLifecycleState.READY) {
-                            "${task.category} • ${task.durationMinutes} min"
-                        } else {
-                            "${task.category} • ${task.durationMinutes} min • ${taskStateLabel(entry.state)}"
-                        },
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Text(
-                        text = "Queued ${formatQueuedAt(entry.queuedAtEpochMs)}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                // Each queued task gets its own bordered card, matching ActiveTasks's ToDoItemRow.
+                OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
+                        Text(
+                            text = task.description,
+                            modifier = Modifier.padding(bottom = 6.dp),
+                            style = MaterialTheme.typography.headlineSmall
+                        )
+                        Text(
+                            text = if (entry.state == TaskLifecycleState.READY) {
+                                "${task.category} • ${task.durationMinutes} min"
+                            } else {
+                                "${task.category} • ${task.durationMinutes} min • ${taskStateLabel(entry.state)}"
+                            },
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            text = "Queued ${formatQueuedAt(entry.queuedAtEpochMs)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
 
-                    when (entry.state) {
-                        TaskLifecycleState.READY -> {
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
-                                Button(modifier = Modifier.weight(1f), onClick = { onStart(task.id) }) { Text("Start") }
-                                ReferButton { onRefer(task.id) }
-                                Button(modifier = Modifier.weight(1f), onClick = { onSubstitute(task.id) }) { Text("Substitute") }
+                        when (entry.state) {
+                            TaskLifecycleState.READY -> {
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                                    Button(modifier = Modifier.weight(1f), onClick = { onStart(task.id) }) { Text("Start") }
+                                    ReferButton { onRefer(task.id) }
+                                    Button(modifier = Modifier.weight(1f), onClick = { onSubstitute(task.id) }) { Text("Substitute") }
+                                }
                             }
-                        }
-                        TaskLifecycleState.STARTED -> {
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
-                                Button(modifier = Modifier.weight(1f), onClick = { onComplete(task.id) }) { Text("Done") }
-                                ReferButton { onRefer(task.id) }
-                                Button(modifier = Modifier.weight(1f), onClick = { onAbandon(task.id) }) { Text("Abandon") }
+                            TaskLifecycleState.STARTED -> {
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                                    Button(modifier = Modifier.weight(1f), onClick = { onComplete(task.id) }) { Text("Done") }
+                                    ReferButton { onRefer(task.id) }
+                                    Button(modifier = Modifier.weight(1f), onClick = { onAbandon(task.id) }) { Text("Abandon") }
+                                }
                             }
-                        }
-                        else -> {
-                            Button(modifier = Modifier.fillMaxWidth(), onClick = onNextPrompt) { Text("Next task") }
+                            else -> {
+                                Button(modifier = Modifier.fillMaxWidth(), onClick = onNextPrompt) { Text("Next task") }
+                            }
                         }
                     }
                 }
@@ -1425,6 +1433,7 @@ fun ScoreScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     initialCategories: Set<String>,
@@ -1512,21 +1521,23 @@ fun SettingsScreen(
     }
 
     Column(modifier = Modifier.fillMaxSize().imePadding()) {
+        // Same header pattern as Task Pool / My Tasks; the arrow behaves exactly like Cancel
+        // (discards the drafts and leaves Settings).
+        TopAppBar(
+            title = { Text("Settings") },
+            navigationIcon = {
+                IconButton(onClick = onCancel) {
+                    Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
+                }
+            }
+        )
         LazyColumn(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp),
+                .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            item {
-                Text(
-                    "Settings",
-                    modifier = Modifier.padding(top = 16.dp, bottom = 4.dp),
-                    style = MaterialTheme.typography.headlineMedium
-                )
-            }
-
             item {
                 OutlinedCard(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1687,13 +1698,13 @@ fun SettingsScreen(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            OutlinedTextField(
+                            ConnectionUrlField(
                                 value = sheetUrl,
                                 onValueChange = { sheetUrl = it },
-                                modifier = Modifier.fillMaxWidth(),
-                                label = { Text("Google Sheet URL") },
-                                placeholder = { Text("https://docs.google.com/spreadsheets/d/...") },
-                                singleLine = true
+                                label = "Google Sheet URL",
+                                placeholder = "https://docs.google.com/spreadsheets/d/...",
+                                check = checkSheetUrl(sheetUrl),
+                                invalidMessage = "Not a Google Sheet URL - it should contain docs.google.com/spreadsheets/d/..."
                             )
                             Button(
                                 modifier = Modifier.fillMaxWidth(),
@@ -1709,13 +1720,13 @@ fun SettingsScreen(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            OutlinedTextField(
+                            ConnectionUrlField(
                                 value = webAppUrl,
                                 onValueChange = { webAppUrl = it },
-                                modifier = Modifier.fillMaxWidth(),
-                                label = { Text("Apps Script Web App URL") },
-                                placeholder = { Text("https://script.google.com/macros/s/.../exec") },
-                                singleLine = true
+                                label = "Apps Script Web App URL",
+                                placeholder = "https://script.google.com/macros/s/.../exec",
+                                check = checkWebAppUrl(webAppUrl),
+                                invalidMessage = "Not an Apps Script Web App URL - it should contain script.google.com/macros/s/..."
                             )
                             Button(
                                 modifier = Modifier.fillMaxWidth(),
@@ -1788,6 +1799,80 @@ fun SettingsScreen(
                 ) {
                     Text(if (saving) "Syncing…" else "Save Settings")
                 }
+            }
+        }
+    }
+}
+
+/**
+ * One connection URL in Settings: a single-line field that grows to show the whole URL while it's
+ * hovered (mouse/stylus/ChromeOS) or focused, and selects the entire URL when tapped/clicked into.
+ * Under it: an error when [check] is invalid, or a link (text = the URL's ID only, target = the full
+ * URL) when it's valid - identical in ActiveTasks.
+ */
+@Composable
+private fun ConnectionUrlField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    placeholder: String,
+    check: UrlCheck,
+    invalidMessage: String
+) {
+    val hoverSource = remember { MutableInteractionSource() }
+    val hovered by hoverSource.collectIsHoveredAsState()
+    var focused by remember { mutableStateOf(false) }
+    var field by remember { mutableStateOf(TextFieldValue(value)) }
+    // A QR scan (or anything else) can change the draft from outside; follow it.
+    LaunchedEffect(value) {
+        if (field.text != value) field = TextFieldValue(value)
+    }
+    // The tap that focuses the field also places the caret, so select-all has to land just after it.
+    LaunchedEffect(focused) {
+        if (focused) {
+            delay(80)
+            field = field.copy(selection = TextRange(0, field.text.length))
+        }
+    }
+    val expanded = hovered || focused
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        OutlinedTextField(
+            value = field,
+            onValueChange = { updated ->
+                val clean = updated.text.replace("\n", "").replace("\r", "")
+                field = if (clean == updated.text) updated else updated.copy(text = clean)
+                onValueChange(clean)
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .hoverable(hoverSource)
+                .onFocusChanged { focused = it.isFocused },
+            label = { Text(label) },
+            placeholder = { Text(placeholder) },
+            isError = check is UrlCheck.Invalid,
+            singleLine = false,
+            minLines = 1,
+            maxLines = if (expanded) 8 else 1,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done)
+        )
+        when (check) {
+            UrlCheck.Empty -> Unit
+            UrlCheck.Invalid -> Text(
+                invalidMessage,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
+            is UrlCheck.Valid -> {
+                val uriHandler = LocalUriHandler.current
+                Text(
+                    check.id,
+                    modifier = Modifier.clickable { runCatching { uriHandler.openUri(check.href) } },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    textDecoration = TextDecoration.Underline,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
         }
     }

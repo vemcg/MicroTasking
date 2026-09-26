@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 Vern McGeorge. All rights reserved.
-# Updated 2026-09-24, after version v0.2.0-82 synchronization-improvements 2026-09-25
+# Updated 2026-09-26, after version v0.2.0-86 main 2026-09-26
 """Generates the GitHub Pages install & onboarding page + QR code pointing at a release APK."""
 import argparse
 import pathlib
@@ -97,6 +97,11 @@ def main() -> None:
         "--template-url",
         default="https://docs.google.com/spreadsheets/d/1YZNQxZlzj8Xj4Bya2v8YEiq01n6jseD3JZSr7BlThJo/edit?usp=sharing",
         help="Google Sheet template URL",
+    )
+    parser.add_argument(
+        "--companion-url",
+        default="https://vemcg.github.io/ActiveTasks/",
+        help="Onboarding page of the companion ActiveTasks app (each app's page links to the other)",
     )
     parser.add_argument("--out", default="docs", help="Output directory")
     args = parser.parse_args()
@@ -219,6 +224,14 @@ def main() -> None:
     text-align: left;
     background: var(--card-bg);
     padding: 1.25rem;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+  }}
+  .companion-link {{
+    margin-top: 1rem;
+    text-align: left;
+    background: var(--card-bg);
+    padding: 0.9rem 1.25rem;
     border-radius: 8px;
     border: 1px solid var(--border);
   }}
@@ -374,6 +387,9 @@ def main() -> None:
     <div class="tagline">Break Procrastination. Build Momentum.</div>
     <div class="intro">
       <strong>MicroTasking</strong> helps you stop overthinking and start doing. Procrastination usually stems from friction, decision fatigue, and feeling overwhelmed by large tasks. MicroTasking overcomes this by prompting you at random times with brief, bite-sized tasks (5&ndash;15 minutes) from your own customizable pool. When a prompt appears, there is no deliberation &mdash; just start, build momentum, and get on with your day.
+    </div>
+    <div class="companion-link">
+      <strong>Companion app:</strong> <a href="{args.companion_url}" target="_blank" rel="noopener">ActiveTasks</a> is the traditional to-do list that shares this same Google Sheet &mdash; tasks you <em>Activate</em> in MicroTasking show up there. <a href="{args.companion_url}" target="_blank" rel="noopener">Open the ActiveTasks install page &rarr;</a>
     </div>
   </header>
 
