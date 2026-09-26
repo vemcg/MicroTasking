@@ -51,6 +51,14 @@
     border-radius: 8px;
     border: 1px solid var(--border);
   }
+  .companion-link {
+    margin-top: 1rem;
+    text-align: left;
+    background: var(--card-bg);
+    padding: 0.9rem 1.25rem;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+  }
   .step {
     background: var(--card-bg);
     border: 1px solid var(--border);
@@ -204,6 +212,9 @@
     <div class="intro">
       <strong>MicroTasking</strong> helps you stop overthinking and start doing. Procrastination usually stems from friction, decision fatigue, and feeling overwhelmed by large tasks. MicroTasking overcomes this by prompting you at random times with brief, bite-sized tasks (5&ndash;15 minutes) from your own customizable pool. When a prompt appears, there is no deliberation &mdash; just start, build momentum, and get on with your day.
     </div>
+    <div class="companion-link">
+      <strong>Companion app:</strong> <a href="https://vemcg.github.io/ActiveTasks/" target="_blank" rel="noopener">ActiveTasks</a> is the traditional to-do list that shares this same Google Sheet &mdash; tasks you <em>Activate</em> in MicroTasking show up there. <a href="https://vemcg.github.io/ActiveTasks/" target="_blank" rel="noopener">Open the ActiveTasks install page &rarr;</a>
+    </div>
   </header>
 
   <main>
@@ -230,16 +241,26 @@
       </div>
       <ol>
         <li>
-          <strong>Scan or Download:</strong> Point your phone's camera at the QR code below, or tap its download link if you are viewing this page on your phone:
-          <div class="qr-container">
-            
-            <img src="qr-0.2.0-86.png" alt="MicroTasking APK QR Code (v0.2.0-86)">
+          <strong>Scan or Download:</strong> Point your phone's camera at the <strong>Stable Release</strong> QR code (on the left) below, or tap its download link if you are viewing this page on your phone:
+          <div class="qr-row">
+            <div class="qr-container">
+            <div class="qr-label">Stable Release</div>
+            <img src="qr-main-0.2.0-86.png" alt="MicroTasking APK QR Code (v0.2.0-86)">
             <br>
             <a href="https://github.com/vemcg/MicroTasking/releases/download/v0.2.0-86/MicroTasking-v0.2.0-86.apk" class="btn" target="_blank" rel="noopener">Download MicroTasking APK (v0.2.0-86)</a>
             <br>
             <a href="https://github.com/vemcg/MicroTasking/releases/download/v0.2.0-86/MicroTasking-v0.2.0-86.apk" target="_blank" rel="noopener">Open the download again</a>
           </div>
-          
+            <div class="qr-container">
+            <div class="qr-label">feature-convergence</div>
+            <img src="qr-0.2.0-87.png" alt="MicroTasking APK QR Code (v0.2.0-87)">
+            <br>
+            <a href="https://github.com/vemcg/MicroTasking/releases/download/v0.2.0-87/MicroTasking-v0.2.0-87.apk" class="btn" target="_blank" rel="noopener">Download MicroTasking APK (v0.2.0-87)</a>
+            <br>
+            <a href="https://github.com/vemcg/MicroTasking/releases/download/v0.2.0-87/MicroTasking-v0.2.0-87.apk" target="_blank" rel="noopener">Open the download again</a>
+          </div>
+          </div>
+          <p class="qr-guidance"><strong>Which one to use:</strong> Install from the <strong>Stable Release</strong> on the left &mdash; that is the build you should download and run. The <strong>feature-convergence</strong> development build on the right is an in-progress branch, published for testing only. You are welcome to try it, but it may be unstable, may fail to install or launch, and carries no guarantee that it works at all.</p>
         </li>
         <li>
           <strong>Allow Sideloading (First Time Only):</strong>
