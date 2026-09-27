@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Vern McGeorge. All rights reserved.
-// Updated 2026-09-26, after version v0.2.0-86 main 2026-09-26
+// Updated 2026-09-26, after version v0.2.0-87 feature-convergence 2026-09-26
 package com.microtasking.app
 
 import android.Manifest
@@ -1136,16 +1136,16 @@ fun TaskPromptScreen(
 
                         when (entry.state) {
                             TaskLifecycleState.READY -> {
+                                ReferButton(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { onRefer(task.id) }
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
                                     Button(modifier = Modifier.weight(1f), onClick = { onStart(task.id) }) { Text("Start") }
-                                    ReferButton { onRefer(task.id) }
                                     Button(modifier = Modifier.weight(1f), onClick = { onSubstitute(task.id) }) { Text("Substitute") }
                                 }
                             }
                             TaskLifecycleState.STARTED -> {
+                                ReferButton(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { onRefer(task.id) }
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
                                     Button(modifier = Modifier.weight(1f), onClick = { onComplete(task.id) }) { Text("Done") }
-                                    ReferButton { onRefer(task.id) }
                                     Button(modifier = Modifier.weight(1f), onClick = { onAbandon(task.id) }) { Text("Abandon") }
                                 }
                             }
@@ -1198,13 +1198,13 @@ fun TaskPromptScreen(
 /**
  * The "Refer to ActiveTasks" hand-off button (see SPEC.md "Task referral to ActiveTasks"): a plain filled
  * Button, so it matches Start/Substitute/Done/Abandon, labeled "Activate" rather than an unlabeled
- * arrow icon. Sits in the middle of the Ready (Start / Substitute) and Started (Done / Abandon)
- * rows, which are exactly the two states where referral is available; referring a Started task
- * discards its timer.
+ * arrow icon. Full width on its own row above the Ready (Start / Substitute) and Started
+ * (Done / Abandon) rows, which are exactly the two states where referral is available; referring a
+ * Started task discards its timer.
  */
 @Composable
-private fun RowScope.ReferButton(onClick: () -> Unit) {
-    Button(modifier = Modifier.weight(1f), onClick = onClick) {
+private fun ReferButton(modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Button(modifier = modifier, onClick = onClick) {
         Text("Activate")
     }
 }
@@ -1726,7 +1726,8 @@ fun SettingsScreen(
                                 label = "Apps Script Web App URL",
                                 placeholder = "https://script.google.com/macros/s/.../exec",
                                 check = checkWebAppUrl(webAppUrl),
-                                invalidMessage = "Not an Apps Script Web App URL - it should contain script.google.com/macros/s/..."
+                                invalidMessage = "Not an Apps Script Web App URL - it should contain script.google.com/macros/s/...",
+                                linkable = false
                             )
                             Button(
                                 modifier = Modifier.fillMaxWidth(),
@@ -1817,7 +1818,10 @@ private fun ConnectionUrlField(
     label: String,
     placeholder: String,
     check: UrlCheck,
-    invalidMessage: String
+    invalidMessage: String,
+    // False for the Web App URL: its /exec address is only an API endpoint (its ID is a deployment
+    // id, not the script's), so opening it shows nothing useful - the ID is displayed, not linked.
+    linkable: Boolean = true
 ) {
     val hoverSource = remember { MutableInteractionSource() }
     val hovered by hoverSource.collectIsHoveredAsState()
@@ -1862,7 +1866,15 @@ private fun ConnectionUrlField(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error
             )
-            is UrlCheck.Valid -> {
+            is UrlCheck.Valid -> if (!linkable) {
+                Text(
+                    check.id,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            } else {
                 val uriHandler = LocalUriHandler.current
                 Text(
                     check.id,
