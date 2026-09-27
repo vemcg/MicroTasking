@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Vern McGeorge. All rights reserved.
-// Updated 2026-09-26, after version v0.2.0-87 feature-convergence 2026-09-26
+// Updated 2026-09-27, after version v0.2.0-88 feature-convergence 2026-09-27
 package com.microtasking.app
 
 import android.Manifest
@@ -42,6 +42,8 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.ui.focus.onFocusChanged
@@ -1136,14 +1138,22 @@ fun TaskPromptScreen(
 
                         when (entry.state) {
                             TaskLifecycleState.READY -> {
-                                ReferButton(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { onRefer(task.id) }
+                                // Half width, in the right-hand column directly above Substitute/Abandon.
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                                    Spacer(modifier = Modifier.weight(1f))
+                                    ReferButton(modifier = Modifier.weight(1f)) { onRefer(task.id) }
+                                }
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
                                     Button(modifier = Modifier.weight(1f), onClick = { onStart(task.id) }) { Text("Start") }
                                     Button(modifier = Modifier.weight(1f), onClick = { onSubstitute(task.id) }) { Text("Substitute") }
                                 }
                             }
                             TaskLifecycleState.STARTED -> {
-                                ReferButton(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { onRefer(task.id) }
+                                // Half width, in the right-hand column directly above Substitute/Abandon.
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                                    Spacer(modifier = Modifier.weight(1f))
+                                    ReferButton(modifier = Modifier.weight(1f)) { onRefer(task.id) }
+                                }
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
                                     Button(modifier = Modifier.weight(1f), onClick = { onComplete(task.id) }) { Text("Done") }
                                     Button(modifier = Modifier.weight(1f), onClick = { onAbandon(task.id) }) { Text("Abandon") }
@@ -1198,13 +1208,21 @@ fun TaskPromptScreen(
 /**
  * The "Refer to ActiveTasks" hand-off button (see SPEC.md "Task referral to ActiveTasks"): a plain filled
  * Button, so it matches Start/Substitute/Done/Abandon, labeled "Activate" rather than an unlabeled
- * arrow icon. Full width on its own row above the Ready (Start / Substitute) and Started
- * (Done / Abandon) rows, which are exactly the two states where referral is available; referring a
+ * arrow icon. Half width, white with green lettering, directly above the Substitute / Abandon
+ * button in the Ready (Start / Substitute) and Started (Done / Abandon) rows, which are exactly the two states where referral is available; referring a
  * Started task discards its timer.
  */
 @Composable
 private fun ReferButton(modifier: Modifier = Modifier, onClick: () -> Unit) {
-    Button(modifier = modifier, onClick = onClick) {
+    // White with green lettering, so it reads as secondary next to the filled Start/Substitute.
+    OutlinedButton(
+        modifier = modifier,
+        onClick = onClick,
+        colors = ButtonDefaults.outlinedButtonColors(
+            containerColor = Color.White,
+            contentColor = MaterialTheme.colorScheme.primary
+        )
+    ) {
         Text("Activate")
     }
 }
